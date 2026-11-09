@@ -117,7 +117,13 @@ export default function PlayClient({ code }: { code: string }) {
           onCancel={myTeam ? () => setPickingTeam(false) : undefined}
         />
       ) : room.state === "lobby" ? (
-        <Lobby state={state} onChangeTeam={() => setPickingTeam(true)} />
+        <Lobby
+          state={state}
+          onChangeTeam={() => setPickingTeam(true)}
+          onRename={(n) => call(() => supabase.rpc("kviz_rename_team", { p_token: token, p_name: n }))}
+          onAddMember={(n) => call(() => supabase.rpc("kviz_add_member", { p_token: token, p_name: n }))}
+          onRemoveMember={(n) => call(() => supabase.rpc("kviz_remove_member", { p_token: token, p_name: n }))}
+        />
       ) : room.state === "question" && room.current ? (
         <QuestionView
           key={room.current.question_id}
@@ -229,7 +235,7 @@ function TeamPicker({
                   <div className="min-w-0">
                     <div className="truncate font-semibold">{t.name}</div>
                     <div className="truncate text-sm text-gray-500 dark:text-gray-400">
-                      {t.players.length ? t.players.join(", ") : "še prazna"}
+                      {[...t.players, ...(t.members ?? [])].join(", ") || "še prazna"}
                     </div>
                   </div>
                   <span className="shrink-0 text-sm font-medium text-violet-600 dark:text-violet-400">
@@ -269,20 +275,160 @@ function TeamPicker({
   );
 }
 
-function Lobby({ state, onChangeTeam }: { state: PlayerState; onChangeTeam: () => void }) {
+function Lobby({
+  state,
+  onChangeTeam,
+  onRename,
+  onAddMember,
+  onRemoveMember,
+}: {
+  state: PlayerState;
+  onChangeTeam: () => void;
+  onRename: (name: string) => Promise<boolean>;
+  onAddMember: (name: string) => Promise<boolean>;
+  onRemoveMember: (name: string) => Promise<boolean>;
+}) {
   const team = state.teams.find((t) => t.id === state.me.team_id);
+  const [editing, setEditing] = useState(false);
+  const everyone = [...(team?.players ?? []), ...(team?.members ?? [])];
+
+  if (editing && team) {
+    return (
+      <TeamEditor
+        team={team}
+        onRename={onRename}
+        onAddMember={onAddMember}
+        onRemoveMember={onRemoveMember}
+        onDone={() => setEditing(false)}
+      />
+    );
+  }
+
   return (
     <div className="my-auto space-y-6 py-10 text-center">
       <div>
         <div className="text-sm text-gray-500 dark:text-gray-400">Tvoja ekipa</div>
-        <div className="text-3xl font-bold">{team?.name}</div>
-        <div className="mt-2 flex items-center justify-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
-          <IconUsers /> {team?.players.join(", ")}
+        <div className="break-words text-3xl font-bold">{team?.name}</div>
+        <div className="mt-3 flex flex-wrap items-center justify-center gap-1.5">
+          <IconUsers className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+          {everyone.map((n) => (
+            <span key={n} className="rounded-full bg-gray-100 px-3 py-1 text-sm dark:bg-gray-800">
+              {n}
+            </span>
+          ))}
         </div>
       </div>
       <p className="animate-pulse text-gray-600 dark:text-gray-300">Čakamo, da voditelj začne …</p>
-      <Button variant="secondary" onClick={onChangeTeam}>
-        Zamenjaj ekipo
+      <div className="flex flex-col gap-2">
+        <Button onClick={() => setEditing(true)} className="w-full py-3 text-base">
+          Uredi ekipo
+        </Button>
+        <Button variant="ghost" onClick={onChangeTeam} className="w-full">
+          Zamenjaj ekipo
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// Urejanje ekipe v lobiju: ime ekipe in člani brez telefona.
+function TeamEditor({
+  team,
+  onRename,
+  onAddMember,
+  onRemoveMember,
+  onDone,
+}: {
+  team: PlayerState["teams"][number];
+  onRename: (name: string) => Promise<boolean>;
+  onAddMember: (name: string) => Promise<boolean>;
+  onRemoveMember: (name: string) => Promise<boolean>;
+  onDone: () => void;
+}) {
+  const [teamName, setTeamName] = useState(team.name);
+  const [member, setMember] = useState("");
+  const [busy, setBusy] = useState(false);
+  const members = team.members ?? [];
+  const nameChanged = teamName.trim() !== "" && teamName.trim() !== team.name;
+
+  const run = async (fn: () => Promise<boolean>) => {
+    setBusy(true);
+    const ok = await fn();
+    setBusy(false);
+    return ok;
+  };
+
+  return (
+    <div className="space-y-6">
+      <h2 className="text-xl font-bold">Uredi ekipo</h2>
+
+      <form
+        className="space-y-2"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (nameChanged) await run(() => onRename(teamName.trim()));
+        }}
+      >
+        <label className="text-sm font-medium" htmlFor="team-name">
+          Ime ekipe
+        </label>
+        <div className="flex gap-2">
+          <Input id="team-name" value={teamName} onChange={(e) => setTeamName(e.target.value.slice(0, 40))} />
+          <Button type="submit" disabled={busy || !nameChanged}>
+            Shrani
+          </Button>
+        </div>
+      </form>
+
+      <div className="space-y-2">
+        <div className="text-sm font-medium">Člani</div>
+        <ul className="divide-y divide-gray-200 rounded-xl border border-gray-200 bg-white dark:divide-gray-800 dark:border-gray-800 dark:bg-gray-900">
+          {team.players.map((p) => (
+            <li key={`p:${p}`} className="flex items-center justify-between gap-3 px-4 py-2.5">
+              <span className="min-w-0 truncate">{p}</span>
+              <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">s telefonom</span>
+            </li>
+          ))}
+          {members.map((m) => (
+            <li key={`m:${m}`} className="flex items-center justify-between gap-3 py-1 pl-4 pr-1">
+              <span className="min-w-0 truncate">{m}</span>
+              <button
+                onClick={() => void run(() => onRemoveMember(m))}
+                disabled={busy}
+                aria-label={`Odstrani ${m}`}
+                className="rounded-lg p-2.5 text-gray-500 hover:bg-gray-100 hover:text-red-600 dark:text-gray-400 dark:hover:bg-gray-800"
+              >
+                <IconX className="h-4 w-4" />
+              </button>
+            </li>
+          ))}
+        </ul>
+        <form
+          className="flex gap-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            const n = member.trim();
+            if (!n) return;
+            if (await run(() => onAddMember(n))) setMember("");
+          }}
+        >
+          <Input
+            value={member}
+            onChange={(e) => setMember(e.target.value.slice(0, 30))}
+            placeholder="Ime člana brez telefona"
+            aria-label="Ime člana"
+          />
+          <Button type="submit" disabled={busy || !member.trim()}>
+            Dodaj
+          </Button>
+        </form>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Kdor ima telefon, naj se pridruži sam s kodo sobe.
+        </p>
+      </div>
+
+      <Button variant="secondary" onClick={onDone} className="w-full py-3 text-base">
+        Končano
       </Button>
     </div>
   );
@@ -375,7 +521,7 @@ function QuestionView({
 
       <p className="mt-5 text-center text-sm text-gray-500 dark:text-gray-400">
         {ans
-          ? `Odgovor ekipe: ${ans.choice_index !== null ? LETTERS[ans.choice_index] : `„${ans.text_answer}“`} (${ans.nickname}) — do konca lahko spremenite.`
+          ? `Odgovor ekipe: ${ans.choice_index !== null ? LETTERS[ans.choice_index] : `„${ans.text_answer}“`} (${ans.nickname}) — lahko ga spremenite, dokler voditelj ne gre naprej. Odgovori bodo razkriti na koncu kategorije.`
           : "Ekipa še ni odgovorila. Odgovori lahko kdorkoli iz ekipe."}
       </p>
     </div>

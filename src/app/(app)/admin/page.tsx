@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import AdminHome from "@/components/admin/AdminHome";
 
-export const metadata = { title: "Kvizi — Kviz" };
+export const metadata = { title: "Kvizi — Garaža pub kviz" };
 
 export default async function Admin() {
   const supabase = await createClient();

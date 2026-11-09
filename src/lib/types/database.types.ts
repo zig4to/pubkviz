@@ -86,6 +86,7 @@ export type KvizTeam = {
   id: string;
   room_id: string;
   name: string;
+  members: string[]; // dopisana imena brez telefona (0003_team_members)
   created_at: string;
 };
 
@@ -125,7 +126,7 @@ export type PlayerState = {
     reveal: RoomReveal | null;
   };
   me: { id: string; nickname: string; team_id: string | null };
-  teams: { id: string; name: string; players: string[] }[];
+  teams: { id: string; name: string; players: string[]; members: string[] }[];
   answer: {
     choice_index: number | null;
     text_answer: string | null;
@@ -162,6 +163,10 @@ export type Database = {
       kviz_create_team: Fn<{ p_token: string; p_name: string }, string>;
       kviz_join_team: Fn<{ p_token: string; p_team: string }, undefined>;
       kviz_answer: Fn<{ p_token: string; p_choice?: number | null; p_text?: string | null }, undefined>;
+      kviz_rename_team: Fn<{ p_token: string; p_name: string }, undefined>;
+      kviz_add_member: Fn<{ p_token: string; p_name: string }, undefined>;
+      kviz_remove_member: Fn<{ p_token: string; p_name: string }, undefined>;
+      kviz_host_remove_member: Fn<{ p_team: string; p_name: string }, undefined>;
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

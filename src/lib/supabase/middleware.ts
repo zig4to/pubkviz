@@ -50,8 +50,10 @@ export async function updateSession(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
   const isAuthPage = AUTH_PAGES.some((p) => path.startsWith(p));
-  // Igralci nimajo računa: vstop s kodo (`/`) in igra (`/igra/…`) sta javna.
-  const isPlayerPage = path === "/" || path === "/igra" || path.startsWith("/igra/");
+  // Igralci nimajo računa: vstop s kodo (`/`), igra (`/igra/…`) in žrebanje
+  // skupin (`/zrebanje`, samo v brskalniku) so javni.
+  const isPlayerPage =
+    path === "/" || path === "/igra" || path.startsWith("/igra/") || path === "/zrebanje";
 
   if (isPlayerPage) {
     return response;

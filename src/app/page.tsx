@@ -2,6 +2,7 @@ import Link from "next/link";
 import SsoBridge from "@/components/auth/SsoBridge";
 import JoinForm from "@/components/play/JoinForm";
 import Logo from "@/components/Logo";
+import { IconShuffle } from "@/components/ui/icons";
 
 // Javna vstopna stran za igralce: vpis kode sobe → /igra/KODA.
 // (SsoBridge: hub TomsStudios odpre koren s fragmentom #sb_at=… → /admin.)
@@ -11,11 +12,18 @@ export default function Home() {
       <SsoBridge />
       <div className="w-full max-w-sm text-center">
         <Logo className="mx-auto mb-4 h-16 w-16" />
-        <h1 className="text-3xl font-bold tracking-tight">Kviz</h1>
+        <h1 className="text-3xl font-bold tracking-tight">Garaža pub kviz</h1>
         <p className="mb-8 mt-1 text-sm text-gray-500 dark:text-gray-400">
           Vpiši kodo sobe s projektorja.
         </p>
         <JoinForm />
+        <Link
+          href="/zrebanje"
+          className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-3 text-base font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+        >
+          <IconShuffle className="h-5 w-5" />
+          Žrebaj skupine
+        </Link>
       </div>
       <Link
         href="/admin"

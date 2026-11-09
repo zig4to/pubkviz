@@ -83,13 +83,15 @@ export default function Stage({ roomId }: { roomId: string }) {
     room.state === "lobby"
       ? "Začni kviz"
       : room.state === "question"
-        ? "Razkrij odgovor"
+        ? room.current?.last_in_category
+          ? "Razkrij odgovore"
+          : "Naslednje vprašanje"
         : room.state === "reveal"
-          ? room.q_index + 1 >= room.question_ids.length
-            ? "Končni rezultati"
-            : room.current?.last_in_category
-              ? "Lestvica"
-              : "Naslednje vprašanje"
+          ? !room.current?.last_in_category
+            ? "Naslednji odgovor"
+            : room.q_index + 1 >= room.question_ids.length
+              ? "Končni rezultati"
+              : "Lestvica"
           : room.state === "scoreboard"
             ? "Naslednja kategorija"
             : null;
@@ -110,7 +112,8 @@ export default function Stage({ roomId }: { roomId: string }) {
             </span>
           )}
           <span className="flex items-center gap-1.5">
-            <IconUsers /> {data.teams.length} ekip · {data.players.length} igralcev
+            <IconUsers /> {data.teams.length} ekip ·{" "}
+            {data.players.length + data.teams.reduce((n, t) => n + (t.members?.length ?? 0), 0)} igralcev
           </span>
           <button onClick={toggleFullscreen} className="rounded-md px-2 py-1 hover:bg-white/10 hover:text-white">
             Celoten zaslon (F)
@@ -121,6 +124,9 @@ export default function Stage({ roomId }: { roomId: string }) {
       <main className="flex flex-1 flex-col px-[4vw] pb-28 pt-2">
         {room.state === "lobby" && <LobbyView data={data} onKick={async (id) => {
           await supabase.rpc("kviz_kick", { p_player: id });
+          await load();
+        }} onRemoveMember={async (teamId, name) => {
+          await supabase.rpc("kviz_host_remove_member", { p_team: teamId, p_name: name });
           await load();
         }} />}
         {(room.state === "question" || room.state === "reveal") && room.current && (
@@ -156,8 +162,27 @@ function toggleFullscreen() {
   else void document.documentElement.requestFullscreen().catch(() => {});
 }
 
-function LobbyView({ data, onKick }: { data: Data; onKick: (playerId: string) => void }) {
-  const joinUrl = `${window.location.origin}/igra/${data.room.code}`;
+function LobbyView({
+  data,
+  onKick,
+  onRemoveMember,
+}: {
+  data: Data;
+  onKick: (playerId: string) => void;
+  onRemoveMember: (teamId: string, name: string) => void;
+}) {
+  // Na localhost (razvoj) QR s telefonom ne bi delal — vzemi IP računalnika.
+  const [origin, setOrigin] = useState(window.location.origin);
+  useEffect(() => {
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname)) return;
+    fetch("/api/lan-origin")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { origin: string | null } | null) => {
+        if (d?.origin) setOrigin(d.origin);
+      })
+      .catch(() => {});
+  }, []);
+  const joinUrl = `${origin}/igra/${data.room.code}`;
   const [qr, setQr] = useState<string | null>(null);
   useEffect(() => {
     QRCode.toString(joinUrl, { type: "svg", margin: 1, color: { dark: "#0b1020", light: "#ffffff" } })
@@ -171,7 +196,7 @@ function LobbyView({ data, onKick }: { data: Data; onKick: (playerId: string) =>
     <div className="grid flex-1 items-center gap-[4vw] lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)]">
       <div className="text-center lg:text-left">
         <p className="text-[2.2vw] leading-tight text-white/70 max-lg:text-2xl">
-          Na telefonu odpri <b className="text-white">{window.location.host}</b> in vpiši kodo
+          Na telefonu odpri <b className="text-white">{origin.replace(/^https?:\/\//, "")}</b> in vpiši kodo
         </p>
         <div className="my-[2vw] font-mono text-[12vw] font-black leading-none tracking-[0.12em] max-lg:text-7xl">
           {data.room.code}
@@ -197,6 +222,9 @@ function LobbyView({ data, onKick }: { data: Data; onKick: (playerId: string) =>
                   .map((p) => (
                     <PlayerChip key={p.id} name={p.nickname} onKick={() => onKick(p.id)} />
                   ))}
+                {(t.members ?? []).map((m) => (
+                  <PlayerChip key={`m:${m}`} name={m} dashed onKick={() => onRemoveMember(t.id, m)} />
+                ))}
               </div>
             </li>
           ))}
@@ -216,9 +244,15 @@ function LobbyView({ data, onKick }: { data: Data; onKick: (playerId: string) =>
   );
 }
 
-function PlayerChip({ name, onKick }: { name: string; onKick: () => void }) {
+function PlayerChip({ name, onKick, dashed }: { name: string; onKick: () => void; dashed?: boolean }) {
   return (
-    <span className="group inline-flex items-center gap-1 rounded-full bg-white/10 py-0.5 pl-2.5 pr-1 text-sm text-white/80">
+    <span
+      title={dashed ? "Brez telefona" : undefined}
+      className={clsx(
+        "group inline-flex items-center gap-1 rounded-full py-0.5 pl-2.5 pr-1 text-sm text-white/80",
+        dashed ? "border border-dashed border-white/30" : "bg-white/10"
+      )}
+    >
       {name}
       <button
         onClick={onKick}
@@ -250,6 +284,11 @@ function QuestionStage({
     <div className="flex flex-1 flex-col gap-[2vw]">
       <div className="flex items-baseline justify-between gap-4 text-[1.4vw] text-white/60 max-lg:text-base">
         <span>
+          {reveal && (
+            <span className="mr-3 rounded-md bg-emerald-500/20 px-2 py-0.5 font-semibold uppercase tracking-wide text-emerald-300">
+              Odgovori
+            </span>
+          )}
           <b className="text-cyan-300">{c.category}</b> · vprašanje {c.category_question}/{c.category_questions}
         </span>
         <span>

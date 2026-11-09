@@ -23,8 +23,10 @@ Ogrodje je kopija **Binga** (prijava, SSO iz huba TomsStudios, tema, PWA, UI
 primitivi). Isti Supabase projekt **ProjektiBaze** (`abjnxhfxjolwwxlckkje`),
 tabele s predpono `kviz_`. Stack: Next.js 16 · React 19 · TypeScript ·
 Tailwind v4 · `@supabase/ssr` · `qrcode`. Barva cyan `#06b6d4` → vijolična
-`#7c3aed` (primarni gumbi `violet-600`), znak Lucide circle-help. Jezik:
-slovenščina.
+`#7c3aed` (primarni gumbi `violet-600`). Ime aplikacije: **Garaža pub kviz**
+(kratko „Garaža kviz“). Znak: garaža (streha + vrata) z vprašajem v vratih —
+isti risbi v `src/app/icon.svg`, `public/icon.svg` in `components/Logo.tsx`.
+Jezik: slovenščina.
 
 ## Ukazi
 
@@ -36,8 +38,9 @@ npm run build
 ```
 
 Ni testov. Za preizkus igre s telefonom na istem Wi-Fi odpri
-`http://<IP računalnika>:3009` (QR na odru uporablja `window.location.origin`,
-zato oder odpri prek IP-ja, ne `localhost`, če naj QR deluje s telefonom).
+`http://<IP računalnika>:3009`. QR na odru uporablja `window.location.origin`;
+če je oder odprt na `localhost`, ga v razvoju zamenja IP računalnika iz
+`/api/lan-origin` (samo `NODE_ENV=development`, sicer 404).
 
 ## Okolje, deploy
 
@@ -53,6 +56,9 @@ zato oder odpri prek IP-ja, ne `localhost`, če naj QR deluje s telefonom).
 |---|---|---|
 | `0001_init` | urejevalnik (`kviz_quizzes`, `kviz_categories`, `kviz_questions`, RLS samo lastnik, neanonimen), sobe/ekipe, funkcije igre (`kviz_open_room`, `kviz_next`, `kviz_grade`, `kviz_snapshot`, `kviz_set_correct`, `kviz_finish`, `kviz_norm`), javni bucket `kviz` (slike, pisanje v `<uid>/…`) | izvedena 2026-11-09 (`kviz_init`) |
 | `0002_player_tokens` | igralci z žetonom namesto anonimne seje (`kviz_players.token`), `kviz_answers`, RPC za igralce (`kviz_join`, `kviz_player_state`, `kviz_create_team`, `kviz_join_team`, `kviz_answer` — vloga anon), `kviz_scoreboard`, `kviz_kick`, sprožilci `kviz_ping_*` | izvedena 2026-11-09 (`kviz_player_tokens`) |
+| `0003_team_members` | člani ekipe brez telefona (`kviz_teams.members text[]`, max 15), `kviz_add_member`/`kviz_remove_member` (žeton), `kviz_host_remove_member` (oder), `kviz_player_state` vrača `members` | izvedena 2026-11-09 (`kviz_team_members`) |
+| `0004_team_rename` | `kviz_rename_team` (žeton, samo v lobiju, unikatno ime) | izvedena 2026-11-09 (`kviz_team_rename`) |
+| `0005_reveal_per_category` | nov `kviz_next`: razkritje odgovorov na koncu kategorije | izvedena 2026-11-09 (`kviz_reveal_per_category`) |
 
 `src/lib/types/database.types.ts` je **ročno napisan** — ob novi migraciji ga
 posodobi. Migracije prek Supabase MCP `apply_migration` (Žiga mora odobriti).
@@ -68,8 +74,10 @@ localStorage `kviz-token-<KODA>`) in vse dela prek security definer RPC z
 
 ### Potek igre (`kviz_next`, en gumb)
 
-`lobby → question → reveal → (scoreboard, če je bilo zadnje vprašanje
-kategorije) → question … → finished`. Ob odprtju sobe se vrstni red vprašanj
+`lobby → question → question → … (vsa vprašanja kategorije, brez razkritja)
+→ reveal (1. vpr. kategorije) → reveal → … → scoreboard → question … →
+finished` (od `0005`). Ko gre voditelj naprej, je prejšnje vprašanje zaprto;
+`kviz_grade` oceni vprašanje šele ob njegovem razkritju. Ob odprtju sobe se vrstni red vprašanj
 zamrzne v `kviz_rooms.question_ids` (kategorija.position, vprašanje.position).
 `current` je očiščen posnetek vprašanja (brez pravilnega odgovora), `reveal`
 se nastavi šele ob razkritju (`kviz_grade` oceni vse odgovore). Vpis se
@@ -86,6 +94,10 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
 
 ## Arhitektura
 
+- `/zrebanje` (gumb „Žrebaj skupine“ na `/`, javno): naključna razporeditev
+  udeležencev v skupine izbrane velikosti — samo v brskalniku
+  (`components/draw/TeamDraw.tsx`, imena v localStorage `kviz-zrebanje`), brez baze.
+
 - `src/lib/supabase/middleware.ts`: `/` in `/igra/*` sta javna, `/login` in
   `/registracija` preusmerita prijavljene na `/admin`, vse ostalo zahteva
   prijavo. Prijava/SSO pristane na `/admin` (hub odpre koren s `#sb_at=…` →
@@ -101,7 +113,8 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
 
 ## Stanje podatkov (2026-11-09)
 
-- Žiga ima „Demo pub kviz“ (2 kategoriji, 4 vprašanja) za preizkus.
+- Žiga ima „Demo pub kviz“ (2 kategoriji, 4 vprašanja) ter „Testni kviz 1 –
+  Svet“ in „Testni kviz 2 – Mešano“ (vsak 2 kategoriji, 5 vprašanj) za preizkus.
 
 ## Pasti
 
@@ -109,4 +122,6 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
   prvo nalaganje je ovito v `setTimeout(…, 0)`.
 - `src/proxy.ts` matcher mora izključevati statične `.js`. `public/sw.js` je
   network-first; ob spremembi povečaj `VERZIJA`.
+- `layout.tsx` ima `translate="no"` + `<meta name="google" content="notranslate">`:
+  Chrome je stran samodejno prevajal (ime ekipe „Jesenčki“ → „autumn“).
 - Datoteke so CRLF na Windows; za popravke raje Edit kot sed z regexi.

@@ -11,8 +11,9 @@ const rubik = Rubik({
 });
 
 export const metadata: Metadata = {
-  title: "Kviz — pub kviz",
+  title: "Garaža pub kviz",
   description: "Pub kviz: vprašanja na projektorju, odgovori s telefona.",
+  other: { google: "notranslate" },
 };
 
 export const viewport: Viewport = {
@@ -27,6 +28,9 @@ export default function RootLayout({
   return (
     <html
       lang="sl"
+      // Brez samodejnega prevoda (Chrome/Google Translate je npr. ime ekipe
+      // „Jesenčki“ prevedel v „autumn“; prevajal bi tudi vprašanja in odgovore).
+      translate="no"
       data-theme="dark"
       data-sso="idle"
       suppressHydrationWarning

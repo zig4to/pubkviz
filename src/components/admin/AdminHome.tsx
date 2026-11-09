@@ -7,7 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { errorText } from "@/lib/kviz";
 import type { KvizQuiz, RoomState } from "@/lib/types/database.types";
 import Button from "@/components/ui/Button";
-import { IconPencil, IconPlus, IconChevronRight } from "@/components/ui/icons";
+import { IconPencil, IconPlus, IconChevronRight, IconShuffle } from "@/components/ui/icons";
 
 type QuizItem = KvizQuiz & { questionCount: number };
 type RoomItem = { id: string; code: string; title: string; state: RoomState; progress: string };
@@ -93,9 +93,17 @@ export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; roo
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h1 className="text-lg font-semibold">Moji kvizi</h1>
-          <Button onClick={newQuiz} disabled={busy === "new"}>
-            <IconPlus /> Nov kviz
-          </Button>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/zrebanje"
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+            >
+              <IconShuffle /> Žrebaj skupine
+            </Link>
+            <Button onClick={newQuiz} disabled={busy === "new"}>
+              <IconPlus /> Nov kviz
+            </Button>
+          </div>
         </div>
         {quizzes.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">

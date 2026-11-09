@@ -1,5 +1,6 @@
-// Znak aplikacije: Lucide circle-help na prelivu cyan → vijolična
-// (enako kot src/app/icon.svg).
+// Znak aplikacije „Garaža pub kviz“: garaža (streha + vrata) z vprašajem v
+// vratih na prelivu cyan → vijolična (enako kot src/app/icon.svg in
+// public/icon.svg — ob spremembi posodobi vse tri).
 export default function Logo({ className = "h-8 w-8" }: { className?: string }) {
   return (
     <svg viewBox="0 0 512 512" className={className} aria-hidden="true">
@@ -18,9 +19,10 @@ export default function Logo({ className = "h-8 w-8" }: { className?: string }) 
         strokeLinejoin="round"
         fill="none"
       >
-        <circle cx="12" cy="12" r="10" />
-        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-        <path d="M12 17h.01" />
+        <path d="M2 21V9.5L12 3l10 6.5V21" />
+        <path d="M6 21V10.5h12V21" />
+        <path d="M10.25 14.69a1.8 1.8 0 0 1 3.5.6c0 1.2-1.8 1.8-1.8 1.8" />
+        <path d="M12 19.5h.01" />
       </g>
     </svg>
   );

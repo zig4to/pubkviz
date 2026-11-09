@@ -6,8 +6,8 @@ import type { MetadataRoute } from "next";
 export default function manifest(): MetadataRoute.Manifest {
   return {
     id: "/",
-    name: "Kviz — pub kviz",
-    short_name: "Kviz",
+    name: "Garaža pub kviz",
+    short_name: "Garaža kviz",
     description: "Pub kviz: vprašanja na projektorju, odgovori s telefona.",
     start_url: "/",
     scope: "/",

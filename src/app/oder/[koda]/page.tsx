@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { normalizeCode } from "@/lib/kviz";
 import StageLoader from "@/components/stage/StageLoader";
 
-export const metadata = { title: "Oder — Kviz" };
+export const metadata = { title: "Oder — Garaža pub kviz" };
 
 // Projektor voditelja. RLS vrne sobo samo njenemu voditelju.
 export default async function Oder({ params }: { params: Promise<{ koda: string }> }) {
