@@ -96,12 +96,13 @@ export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; roo
           <div className="flex items-center gap-2">
             <Link
               href="/zrebanje"
+              aria-label="Žrebaj skupine"
               className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
             >
-              <IconShuffle /> Žrebaj skupine
+              <IconShuffle /> <span className="hidden sm:inline">Žrebaj skupine</span>
             </Link>
-            <Button onClick={newQuiz} disabled={busy === "new"}>
-              <IconPlus /> Nov kviz
+            <Button aria-label="Nov kviz" onClick={newQuiz} disabled={busy === "new"}>
+              <IconPlus /> <span className="hidden sm:inline">Nov kviz</span>
             </Button>
           </div>
         </div>
