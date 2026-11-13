@@ -6,3 +6,4 @@ admin ureja kvize na `/admin`.
 
 Next.js 16 + Supabase. `npm install && npm run dev` → http://localhost:3009.
 Podrobnosti v `CLAUDE.md`.
+<!-- Klodi workflow v3 test -->
