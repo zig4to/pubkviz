@@ -19,7 +19,7 @@ Pub kviz (uporabnik/voditelj: Žiga). Trije zasloni:
    možnosti ali `text` s sprejetimi odgovori, slika, točke 1/2/3/5), „Začni
    igro“, seznam odprtih sob.
 
-Ogrodje je kopija **Binga** (prijava, SSO iz huba TomsStudios, tema, PWA, UI
+Ogrodje je kopija **Binga** (prijava, SSO iz huba Bitneverse, tema, PWA, UI
 primitivi). Isti Supabase projekt **ProjektiBaze** (`abjnxhfxjolwwxlckkje`),
 tabele s predpono `kviz_`. Stack: Next.js 16 · React 19 · TypeScript ·
 Tailwind v4 · `@supabase/ssr` · `qrcode`. Barva cyan `#06b6d4` → vijolična

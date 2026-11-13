@@ -5,7 +5,7 @@ import Logo from "@/components/Logo";
 import { IconShuffle } from "@/components/ui/icons";
 
 // Javna vstopna stran za igralce: vpis kode sobe → /igra/KODA.
-// (SsoBridge: hub TomsStudios odpre koren s fragmentom #sb_at=… → /admin.)
+// (SsoBridge: hub Bitneverse odpre koren s fragmentom #sb_at=… → /admin.)
 export default function Home() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-cyan-500/15 via-transparent to-violet-600/20 px-4 py-10">
