@@ -59,6 +59,7 @@ Ni testov. Za preizkus igre s telefonom na istem Wi-Fi odpri
 | `0003_team_members` | člani ekipe brez telefona (`kviz_teams.members text[]`, max 15), `kviz_add_member`/`kviz_remove_member` (žeton), `kviz_host_remove_member` (oder), `kviz_player_state` vrača `members` | izvedena 2026-11-09 (`kviz_team_members`) |
 | `0004_team_rename` | `kviz_rename_team` (žeton, samo v lobiju, unikatno ime) | izvedena 2026-11-09 (`kviz_team_rename`) |
 | `0005_reveal_per_category` | nov `kviz_next`: razkritje odgovorov na koncu kategorije | izvedena 2026-11-09 (`kviz_reveal_per_category`) |
+| `0006_category_notes` | `kviz_categories.notes` (stikalo „Beležka“ v urejevalniku); `kviz_snapshot` vrača še `category_id`, `notes`. Beležka igralca živi samo v localStorage `kviz-notes-<KODA>` (`notesStore` v `lib/kviz.ts`), ne šteje kot odgovor | izvedena 2026-11-18 (`kviz_category_notes`) |
 
 `src/lib/types/database.types.ts` je **ročno napisan** — ob novi migraciji ga
 posodobi. Migracije prek Supabase MCP `apply_migration` (Žiga mora odobriti).

@@ -13,10 +13,12 @@ import {
   IconArrowLeft,
   IconArrowUp,
   IconImage,
+  IconNotebook,
   IconPencil,
   IconPlus,
   IconTrash,
 } from "@/components/ui/icons";
+import clsx from "@/lib/utils/clsx";
 import QuestionDialog from "./QuestionDialog";
 
 const ICON_BTN =
@@ -77,6 +79,13 @@ export default function QuizEditor({
     const { error } = await supabase.from("kviz_categories").update({ name: n }).eq("id", cat.id);
     if (error) return fail(error);
     setCats((cs) => cs.map((c) => (c.id === cat.id ? { ...c, name: n } : c)));
+  };
+
+  const toggleNotes = async (cat: KvizCategory) => {
+    const notes = !cat.notes;
+    const { error } = await supabase.from("kviz_categories").update({ notes }).eq("id", cat.id);
+    if (error) return fail(error);
+    setCats((cs) => cs.map((c) => (c.id === cat.id ? { ...c, notes } : c)));
   };
 
   const deleteCategory = async (cat: KvizCategory) => {
@@ -178,6 +187,20 @@ export default function QuizEditor({
             <div className="flex items-center gap-1 border-b border-gray-200 px-3 py-2 dark:border-gray-800">
               <span className="w-6 text-sm font-semibold text-gray-400">{ci + 1}.</span>
               <CategoryName cat={cat} onSave={(n) => renameCategory(cat, n)} />
+              <button
+                className={clsx(
+                  "flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium",
+                  cat.notes
+                    ? "bg-cyan-100 text-cyan-800 dark:bg-cyan-950 dark:text-cyan-300"
+                    : "text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                )}
+                aria-pressed={cat.notes}
+                title="Beležka na telefonu: igralci si pri vsakem vprašanju te kategorije lahko zapisujejo ugibanja (velja samo vpisan odgovor)."
+                onClick={() => toggleNotes(cat)}
+              >
+                <IconNotebook />
+                <span className="hidden sm:inline">Beležka</span>
+              </button>
               <button className={ICON_BTN} disabled={ci === 0} aria-label="Gor" onClick={() => swap("kviz_categories", sortedCats, ci, ci - 1, setCats)}>
                 <IconArrowUp />
               </button>

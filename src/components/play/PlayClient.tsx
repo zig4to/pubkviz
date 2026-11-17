@@ -4,11 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useRoomPing } from "@/lib/useRoomPing";
-import { LETTERS, OPTION_COLORS, errorText, playerStore } from "@/lib/kviz";
-import type { PlayerState } from "@/lib/types/database.types";
+import { LETTERS, OPTION_COLORS, errorText, notesStore, playerStore } from "@/lib/kviz";
+import type { PlayerState, RoomCurrent } from "@/lib/types/database.types";
 import Button from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { IconCheck, IconUsers, IconX } from "@/components/ui/icons";
+import { Input, Textarea } from "@/components/ui/Input";
+import { IconCheck, IconNotebook, IconUsers, IconX } from "@/components/ui/icons";
 import clsx from "@/lib/utils/clsx";
 
 // Telefon igralca. Vse gre prek RPC funkcij z žetonom (glej
@@ -519,11 +519,63 @@ function QuestionView({
         </form>
       )}
 
+      {c.notes && <NotesBox code={state.room.code} current={c} />}
+
       <p className="mt-5 text-center text-sm text-gray-500 dark:text-gray-400">
         {ans
           ? `Odgovor ekipe: ${ans.choice_index !== null ? LETTERS[ans.choice_index] : `„${ans.text_answer}“`} (${ans.nickname}) — lahko ga spremenite, dokler voditelj ne gre naprej. Odgovori bodo razkriti na koncu kategorije.`
           : "Ekipa še ni odgovorila. Odgovori lahko kdorkoli iz ekipe."}
       </p>
+    </div>
+  );
+}
+
+// Beležka (kategorije z vklopljeno beležko, npr. Nadpomenka): igralec si
+// zapisuje ugibanja; shrani se samo v tem brskalniku. Prikaže tudi beležke
+// prejšnjih vprašanj iste kategorije — pride prav pri iskanju povezave.
+// QuestionView je ključen z vprašanjem, zato se začetno stanje prebere ob
+// vsakem novem vprašanju.
+function NotesBox({ code, current }: { code: string; current: RoomCurrent }) {
+  const catId = current.category_id ?? current.category;
+  const [all] = useState(() => notesStore.all(code));
+  const [text, setText] = useState(() => all[current.question_id]?.text ?? "");
+  const earlier = Object.entries(all)
+    .filter(([qid, n]) => qid !== current.question_id && n.category_id === catId && n.n < current.category_question)
+    .sort(([, a], [, b]) => a.n - b.n);
+
+  return (
+    <div className="mt-6 rounded-2xl border border-dashed border-cyan-300 bg-cyan-50/60 p-3 dark:border-cyan-800 dark:bg-cyan-950/30">
+      <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-cyan-800 dark:text-cyan-300">
+        <IconNotebook className="h-4 w-4" /> Beležka
+        <span className="font-normal text-cyan-700/80 dark:text-cyan-400/80">— samo zate, ne šteje kot odgovor</span>
+      </div>
+      {earlier.length > 0 && (
+        <ul className="mb-2 space-y-1 text-sm">
+          {earlier.map(([qid, n]) => (
+            <li key={qid} className="flex gap-2">
+              <span className="shrink-0 font-semibold text-gray-500 dark:text-gray-400">{n.n}.</span>
+              <span className="min-w-0 whitespace-pre-wrap break-words">{n.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          const t = e.target.value.slice(0, 500);
+          setText(t);
+          notesStore.set(code, current.question_id, {
+            category_id: catId,
+            n: current.category_question,
+            prompt: current.prompt.slice(0, 80),
+            text: t,
+          });
+        }}
+        rows={3}
+        placeholder="Ugibanja, ideje … (končni odgovor vpiši zgoraj)"
+        aria-label="Beležka"
+        className="text-base"
+      />
     </div>
   );
 }

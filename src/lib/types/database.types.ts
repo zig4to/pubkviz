@@ -25,6 +25,8 @@ export type KvizCategory = {
   quiz_id: string;
   name: string;
   position: number;
+  /** Beležka na telefonu igralca (samo v brskalniku, ne šteje kot odgovor). */
+  notes: boolean;
   created_at: string;
 };
 
@@ -49,6 +51,8 @@ export type RoomCurrent = {
   index: number; // 0-based v celem kvizu
   total: number;
   category: string;
+  category_id?: string; // od 0006
+  notes?: boolean; // od 0006: beležka na telefonu
   category_index: number; // 1-based
   category_total: number;
   category_question: number; // 1-based znotraj kategorije

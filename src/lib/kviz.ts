@@ -40,6 +40,27 @@ function lsSet(k: string, v: string | null) {
   }
 }
 
+/** Beležka igralca (kategorije z vklopljeno beležko) — samo v tem brskalniku,
+ *  ne gre v bazo in ne šteje kot odgovor. Ključ: soba, nato vprašanje. */
+export type PlayerNote = { category_id: string; n: number; prompt: string; text: string };
+const NOTES_KEY = (code: string) => `kviz-notes-${code}`;
+
+export const notesStore = {
+  all(code: string): Record<string, PlayerNote> {
+    try {
+      return JSON.parse(lsGet(NOTES_KEY(code)) ?? "{}") as Record<string, PlayerNote>;
+    } catch {
+      return {};
+    }
+  },
+  set(code: string, questionId: string, note: PlayerNote) {
+    const all = notesStore.all(code);
+    if (note.text.trim()) all[questionId] = note;
+    else delete all[questionId];
+    lsSet(NOTES_KEY(code), JSON.stringify(all));
+  },
+};
+
 export const playerStore = {
   getToken: (code: string) => lsGet(TOKEN_KEY(code)),
   setToken: (code: string, token: string | null) => lsSet(TOKEN_KEY(code), token),
