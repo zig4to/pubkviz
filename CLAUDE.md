@@ -106,7 +106,8 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
 
 - `/zrebanje` (gumb „Žrebaj skupine“ na `/`, javno): naključna razporeditev
   udeležencev v skupine izbrane velikosti — samo v brskalniku
-  (`components/draw/TeamDraw.tsx`, imena v localStorage `kviz-zrebanje`). Če je
+  (`components/draw/TeamDraw.tsx`, imena v localStorage `kviz-zrebanje`; ločena
+  seznama Moški/Ženske, spola enakomerno pomešana po skupinah). Če je
   voditelj prijavljen, se izžrebane ekipe shranijo v `kviz_saved_teams` (0015).
 
 - `src/lib/supabase/middleware.ts`: `/` in `/igra/*` sta javna, `/login` in

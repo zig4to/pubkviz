@@ -9,21 +9,27 @@ import { IconArrowLeft, IconCheck, IconCopy, IconShuffle } from "@/components/ui
 import clsx from "@/lib/utils/clsx";
 import DrawShow from "./DrawShow";
 
-// Žrebanje skupin: vpiši udeležence (vsak v svojo vrstico ali ločeni z
-// vejico), izberi velikost skupine, naključno razporedi. Vse teče v
-// brskalniku; seznam imen si stran zapomni (localStorage) za ta brskalnik.
+// Žrebanje skupin: vpiši moške in ženske (vsak v svojo vrstico ali ločeni z
+// vejico), izberi velikost skupine, naključno razporedi tako, da so spoli
+// čim bolj enakomerno razporejeni. Vse teče v brskalniku; seznama imen si
+// stran zapomni (localStorage) za ta brskalnik. `names` = moški (prej vsi).
 const STORE_KEY = "kviz-zrebanje";
 const QUICK_SIZES = [2, 3, 4, 5, 6];
 
-type Store = { names: string; size: number; teams: string };
+type Store = { names: string; women: string; size: number; teams: string };
 
 function readStore(): Store {
   try {
     const v = JSON.parse(localStorage.getItem(STORE_KEY) ?? "null");
     if (v && typeof v.names === "string" && Number.isInteger(v.size))
-      return { names: v.names, size: v.size, teams: typeof v.teams === "string" ? v.teams : "" };
+      return {
+        names: v.names,
+        women: typeof v.women === "string" ? v.women : "",
+        size: v.size,
+        teams: typeof v.teams === "string" ? v.teams : "",
+      };
   } catch {}
-  return { names: "", size: 4, teams: "" };
+  return { names: "", women: "", size: 4, teams: "" };
 }
 
 function writeStore(s: Store) {
@@ -61,20 +67,24 @@ function randomInt(max: number) {
   return buf[0] % max;
 }
 
-// Fisher–Yates, nato razdeli v ceil(n / size) skupin tako, da se velikosti
-// razlikujejo največ za 1 (npr. 10 ljudi po 4 → 4, 3, 3).
-function draw(names: string[], size: number): string[][] {
-  const a = shuffle(names);
-  const count = Math.max(1, Math.ceil(a.length / size));
+// Razdeli v ceil(n / size) skupin: najprej premešani moški po vrsti v skupine,
+// nato premešane ženske nadaljujejo tam, kjer so moški končali. Tako se
+// velikosti razlikujejo največ za 1 in spola sta čim bolj enakomerno
+// razporejena (npr. 4 moški + 4 ženske po 2 → v vsaki skupini moški in ženska).
+// Vrstni red skupin na koncu premešamo, da prve niso vedno tiste z več moškimi.
+function draw(men: string[], women: string[], size: number): string[][] {
+  const all = [...shuffle(men), ...shuffle(women)];
+  const count = Math.max(1, Math.ceil(all.length / size));
   const groups: string[][] = Array.from({ length: count }, () => []);
-  a.forEach((n, i) => groups[i % count].push(n));
-  return groups;
+  all.forEach((n, i) => groups[i % count].push(n));
+  return shuffle(groups.map((g) => shuffle(g)));
 }
 
 export default function TeamDraw() {
   const router = useRouter();
   const [initial] = useState(readStore);
   const [text, setText] = useState(initial.names);
+  const [womenText, setWomenText] = useState(initial.women);
   const [size, setSize] = useState(initial.size);
   const [teamText, setTeamText] = useState(initial.teams);
   const [groups, setGroups] = useState<string[][] | null>(null);
@@ -101,7 +111,7 @@ export default function TeamDraw() {
   };
 
   const startDraw = () => {
-    const g = draw(names, size);
+    const g = draw(men, women, size);
     const l = drawLabels(teamNames, g.length);
     setGroups(g);
     setLabels(l);
@@ -110,17 +120,25 @@ export default function TeamDraw() {
     void save(g, l);
   };
 
-  const names = parseNames(text);
+  const men = parseNames(text);
+  const women = parseNames(womenText);
+  const names = [...men, ...women];
   const teamNames = parseNames(teamText);
   const canDraw = names.length >= 2 && size >= 1;
   const groupCount = Math.max(1, Math.ceil(names.length / Math.max(1, size)));
+  // Ali lahko vsaka skupina dobi vsaj enega moškega in eno žensko?
+  const mixedShort = men.length > 0 && women.length > 0 && Math.min(men.length, women.length) < groupCount;
 
-  const update = (t: string, s: number, tt = teamText) => {
-    setText(t);
-    setSize(s);
-    setTeamText(tt);
-    writeStore({ names: t, size: s, teams: tt });
+  const update = (patch: Partial<Store>) => {
+    const s: Store = { names: text, women: womenText, size, teams: teamText, ...patch };
+    setText(s.names);
+    setWomenText(s.women);
+    setSize(s.size);
+    setTeamText(s.teams);
+    writeStore(s);
   };
+  const plural = (n: number) =>
+    n === 1 ? "oseba" : n === 2 ? "osebi" : n === 3 || n === 4 ? "osebe" : "oseb";
 
   const copy = async () => {
     const out = (groups ?? []).map((g, i) => (labels[i] !== `Skupina ${i + 1}` ? `Skupina ${i + 1} – ${labels[i]}` : labels[i]) + `: ${g.join(", ")}`).join("\n");
@@ -141,29 +159,45 @@ export default function TeamDraw() {
       </button>
       <h1 className="text-2xl font-bold tracking-tight">Žrebaj skupine</h1>
       <p className="mb-6 mt-1 text-sm text-gray-500 dark:text-gray-400">
-        Vpiši vse udeležence, izberi, koliko ljudi naj bo v skupini, in naključno jih razporedi.
+        Vpiši moške in ženske, izberi, koliko ljudi naj bo v skupini, in naključno jih razporedi — spola bosta v
+        skupinah čim bolj enakomerno pomešana.
       </p>
 
       <div className="space-y-5">
         <div className="space-y-1.5">
-          <div className="flex items-baseline justify-between">
-            <label htmlFor="names" className="text-sm font-medium">
-              Udeleženci
-            </label>
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              {names.length}{" "}
-              {names.length === 1 ? "oseba" : names.length === 2 ? "osebi" : names.length === 3 || names.length === 4 ? "osebe" : "oseb"}
-            </span>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(
+              [
+                ["men", "Moški", text, "names", "Bor\nCene\nDavid\n…"],
+                ["women", "Ženske", womenText, "women", "Ana\nEva\nMaja\n…"],
+              ] as const
+            ).map(([id, label, value, field, placeholder]) => {
+              const n = parseNames(value).length;
+              return (
+                <div key={id} className="space-y-1.5">
+                  <div className="flex items-baseline justify-between">
+                    <label htmlFor={id} className="text-sm font-medium">
+                      {label}
+                    </label>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {n} {plural(n)}
+                    </span>
+                  </div>
+                  <Textarea
+                    id={id}
+                    value={value}
+                    onChange={(e) => update({ [field]: e.target.value })}
+                    rows={8}
+                    placeholder={placeholder}
+                    className="font-medium"
+                  />
+                </div>
+              );
+            })}
           </div>
-          <Textarea
-            id="names"
-            value={text}
-            onChange={(e) => update(e.target.value, size)}
-            rows={8}
-            placeholder={"Ana\nBor\nCene\n…"}
-            className="font-medium"
-          />
-          <p className="text-xs text-gray-500 dark:text-gray-400">Vsako ime v svojo vrstico ali ločeno z vejico.</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Vsako ime v svojo vrstico ali ločeno z vejico. Skupaj {names.length} {plural(names.length)}.
+          </p>
         </div>
 
         <div className="space-y-1.5">
@@ -172,7 +206,7 @@ export default function TeamDraw() {
             {QUICK_SIZES.map((n) => (
               <button
                 key={n}
-                onClick={() => update(text, n)}
+                onClick={() => update({ size: n })}
                 className={clsx(
                   "h-11 w-11 rounded-lg border text-base font-semibold transition-colors",
                   size === n
@@ -189,7 +223,7 @@ export default function TeamDraw() {
                 min={1}
                 max={50}
                 value={size}
-                onChange={(e) => update(text, Math.min(50, Math.max(1, Number(e.target.value) || 1)))}
+                onChange={(e) => update({ size: Math.min(50, Math.max(1, Number(e.target.value) || 1)) })}
                 aria-label="Druga velikost skupine"
                 className="h-11 text-center"
               />
@@ -199,6 +233,10 @@ export default function TeamDraw() {
             <p className="text-xs text-gray-500 dark:text-gray-400">
               {groupCount} {groupCount === 1 ? "skupina" : groupCount === 2 ? "skupini" : groupCount < 5 ? "skupine" : "skupin"}
               {names.length % size !== 0 && groupCount > 1 && " — nekatere bodo imele osebo manj"}
+              {mixedShort &&
+                (men.length > women.length
+                  ? " — žensk je manj, preostali moški bodo skupaj"
+                  : " — moških je manj, preostale ženske bodo skupaj")}
             </p>
           )}
         </div>
@@ -217,7 +255,7 @@ export default function TeamDraw() {
           <Textarea
             id="teams"
             value={teamText}
-            onChange={(e) => update(text, size, e.target.value)}
+            onChange={(e) => update({ teams: e.target.value })}
             rows={4}
             placeholder={"Jesenčki\nKvizovci\nPametnjakoviči\n…"}
             className="font-medium"

@@ -205,14 +205,45 @@ export default function Scoring({ roomId }: { roomId: string }) {
   const cat =
     categories.find((c) => c.id === catId) ?? categories.find((c) => c.id === current?.category_id) ?? categories[0];
 
+  // 0 = neocenjeno, 1 = delno (npr. miks z neocenjenimi deli), 2 = ocenjeno.
+  const graded = (tid: string, q: Q): 0 | 1 | 2 => {
+    const e = entry(tid, q.id);
+    if (e.parts) {
+      const marked = e.parts.filter((x) => x !== null).length;
+      return marked === 0 ? 0 : marked === e.parts.length ? 2 : 1;
+    }
+    return e.correct === null ? 0 : 2;
+  };
+
   const goTo = (i: number) => {
     setFollow(false);
     setManualIdx(Math.max(0, Math.min(items.length - 1, i)));
   };
 
-  return (
-    <Shell room={room}>
-      <nav className="mb-4 grid grid-cols-4 gap-1 rounded-xl bg-gray-100 p-1 text-sm dark:bg-gray-900">
+  // Naprej / nazaj: po vprašanju → vprašanje, po ekipi → kategorija.
+  const catIdx = cat ? categories.findIndex((c) => c.id === cat.id) : -1;
+  const stepping = activeView === "question" || activeView === "team";
+  const canPrev = activeView === "question" ? idx > 0 : catIdx > 0;
+  const canNext = activeView === "question" ? idx < items.length - 1 : catIdx < categories.length - 1;
+  const step = (d: -1 | 1) => {
+    if (activeView === "question") goTo(idx + d);
+    else if (activeView === "team" && categories[catIdx + d]) setCatId(categories[catIdx + d].id);
+  };
+  const withTimeline = stepping && teams.length > 0;
+
+  const toolbar = (
+    <div className="flex flex-wrap items-center gap-2">
+      {stepping && (
+        <div className="flex gap-1">
+          <Button variant="secondary" onClick={() => step(-1)} disabled={!canPrev}>
+            <IconChevronLeft /> Nazaj
+          </Button>
+          <Button variant="secondary" onClick={() => step(1)} disabled={!canNext}>
+            Naprej <IconChevronRight />
+          </Button>
+        </div>
+      )}
+      <nav className="flex gap-1 rounded-xl bg-gray-100 p-1 text-sm dark:bg-gray-900">
         {(
           [
             ["question", "Po vprašanju"],
@@ -224,8 +255,9 @@ export default function Scoring({ roomId }: { roomId: string }) {
           <button
             key={v}
             onClick={() => setView(v)}
+            aria-pressed={activeView === v}
             className={clsx(
-              "rounded-lg px-2 py-2 font-medium",
+              "whitespace-nowrap rounded-lg px-3 py-1.5 font-medium",
               activeView === v ? "bg-white shadow-sm dark:bg-gray-800" : "text-gray-500 dark:text-gray-400",
             )}
           >
@@ -233,242 +265,346 @@ export default function Scoring({ roomId }: { roomId: string }) {
           </button>
         ))}
       </nav>
+    </div>
+  );
 
+  return (
+    <Shell room={room} toolbar={toolbar}>
       {error && (
         <p className="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
           {error}
         </p>
       )}
 
-      {activeView !== "teams" && teams.length === 0 && (
-        <p className="rounded-xl border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-gray-700">
-          Najprej dodaj ekipe v zavihku „Ekipe“.
-        </p>
-      )}
+      <div className={clsx(withTimeline && "grid items-start gap-6 lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]")}>
+        {withTimeline && (
+          <ScoreTimeline
+            categories={categories}
+            stageIdx={stageIdx}
+            isSelected={(q) => (activeView === "question" ? q.index === idx : q.category_id === cat?.id)}
+            status={(q) => {
+              if (activeView === "team") return team ? graded(team.id, q) : 0;
+              const g = teams.map((t) => graded(t.id, q));
+              return g.every((x) => x === 2) ? 2 : g.some((x) => x > 0) ? 1 : 0;
+            }}
+            onPick={(q) => {
+              if (activeView === "team") setCatId(q.category_id);
+              else goTo(q.index);
+            }}
+          />
+        )}
 
-      {activeView === "teams" && (
-        <TeamsEditor
-          teams={teams}
-          importable={savedNames.filter((n) => !teams.some((t) => t.name.toLowerCase() === n.toLowerCase()))}
-          onImport={async () => {
-            const { error } = await supabase.rpc("kviz_host_import_teams", { p_room: room.id });
-            if (error) setError(errorText(error));
-            await load();
-          }}
-          onAdd={async (name) => {
-            const { error } = await supabase.rpc("kviz_host_add_team", { p_room: room.id, p_name: name });
-            if (error) return errorText(error);
-            await load();
-            return null;
-          }}
-          onRename={async (id, name) => {
-            const { error } = await supabase.rpc("kviz_host_rename_team", { p_team: id, p_name: name });
-            if (error) return errorText(error);
-            await load();
-            return null;
-          }}
-          onDelete={async (id) => {
-            const { error } = await supabase.rpc("kviz_host_delete_team", { p_team: id });
-            if (error) setError(errorText(error));
-            await load();
-          }}
-        />
-      )}
-
-      {activeView === "question" && current && teams.length > 0 && (
-        <section>
-          <div className="mb-3 flex items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => goTo(idx - 1)}
-              disabled={idx === 0}
-              aria-label="Prejšnje vprašanje"
-            >
-              <IconChevronLeft />
-            </Button>
-            <div className="min-w-0 flex-1 text-center">
-              <div className="truncate text-xs font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
-                {current.category}
-              </div>
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Vprašanje {current.n}/{current.of} · {current.points}{" "}
-                {current.points === 1
-                  ? "točka"
-                  : current.points === 2
-                    ? "točki"
-                    : current.points < 5
-                      ? "točke"
-                      : "točk"}
-                {current.parts.length > 0 &&
-                  ` (${current.parts.length} × ${fmt(current.points / current.parts.length)})`}
-              </div>
-            </div>
-            <Button
-              variant="secondary"
-              onClick={() => goTo(idx + 1)}
-              disabled={idx >= items.length - 1}
-              aria-label="Naslednje vprašanje"
-            >
-              <IconChevronRight />
-            </Button>
-          </div>
-          {!follow && (
-            <button
-              onClick={() => setFollow(true)}
-              className="mb-3 w-full rounded-lg bg-violet-50 px-3 py-1.5 text-sm text-violet-700 dark:bg-violet-950/50 dark:text-violet-300"
-            >
-              Sledi odru (trenutno vprašanje {items[stageIdx]?.n} v „{items[stageIdx]?.category}“)
-            </button>
-          )}
-          <div className="mb-4 rounded-xl border border-gray-200 p-3 dark:border-gray-800">
-            <p className="whitespace-pre-line text-sm">{plainPrompt(current.prompt)}</p>
-            <p className="mt-2 text-sm font-semibold text-emerald-700 dark:text-emerald-400">
-              ✓ {correctText(current)}
+        <div className="min-w-0">
+          {activeView !== "teams" && teams.length === 0 && (
+            <p className="rounded-xl border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-gray-700">
+              Najprej dodaj ekipe v zavihku „Ekipe“.
             </p>
-          </div>
-          <ul className="space-y-2">
-            {teams.map((t) => (
-              <MarkRow
-                key={t.id}
-                label={t.name}
-                sub={`skupaj ${fmt(teamScore(t.id))} t.`}
-                q={current}
-                value={entry(t.id, current.id)}
-                onChange={(v, parts) => void mark(t.id, current, v, parts)}
-              />
-            ))}
-          </ul>
-          {teams.some((t) => entry(t.id, current.id).correct === null) && (
-            <Button
-              variant="ghost"
-              className="mt-3 w-full"
-              onClick={() => {
-                teams
-                  .filter((t) => entry(t.id, current.id).correct === null)
-                  .forEach((t) => {
-                    const p = entry(t.id, current.id).parts;
-                    void mark(t.id, current, false, p ? p.map((x) => x ?? false) : null);
-                  });
-              }}
-            >
-              Neoznačene → narobe
-            </Button>
           )}
-        </section>
-      )}
 
-      {activeView === "team" && team && cat && (
-        <section>
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {teams.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => setTeamId(t.id)}
-                className={clsx(
-                  "rounded-full border px-3 py-1 text-sm",
-                  t.id === team.id
-                    ? "border-violet-600 bg-violet-600 text-white"
-                    : "border-gray-300 dark:border-gray-700",
-                )}
+          {activeView === "teams" && (
+            <TeamsEditor
+              teams={teams}
+              importable={savedNames.filter((n) => !teams.some((t) => t.name.toLowerCase() === n.toLowerCase()))}
+              onImport={async () => {
+                const { error } = await supabase.rpc("kviz_host_import_teams", { p_room: room.id });
+                if (error) setError(errorText(error));
+                await load();
+              }}
+              onAdd={async (name) => {
+                const { error } = await supabase.rpc("kviz_host_add_team", { p_room: room.id, p_name: name });
+                if (error) return errorText(error);
+                await load();
+                return null;
+              }}
+              onRename={async (id, name) => {
+                const { error } = await supabase.rpc("kviz_host_rename_team", { p_team: id, p_name: name });
+                if (error) return errorText(error);
+                await load();
+                return null;
+              }}
+              onDelete={async (id) => {
+                const { error } = await supabase.rpc("kviz_host_delete_team", { p_team: id });
+                if (error) setError(errorText(error));
+                await load();
+              }}
+            />
+          )}
+
+          {activeView === "question" && current && teams.length > 0 && (
+            <section>
+              <div className="mb-3">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
+                    {current.category}
+                  </div>
+                  <div className="text-sm text-gray-500 dark:text-gray-400">
+                    Vprašanje {current.n}/{current.of} · {current.points}{" "}
+                    {current.points === 1
+                      ? "točka"
+                      : current.points === 2
+                        ? "točki"
+                        : current.points < 5
+                          ? "točke"
+                          : "točk"}
+                    {current.parts.length > 0 &&
+                      ` (${current.parts.length} × ${fmt(current.points / current.parts.length)})`}
+                  </div>
+                </div>
+              </div>
+              {!follow && (
+                <button
+                  onClick={() => setFollow(true)}
+                  className="mb-3 w-full rounded-lg bg-violet-50 px-3 py-1.5 text-sm text-violet-700 dark:bg-violet-950/50 dark:text-violet-300"
+                >
+                  Sledi odru (trenutno vprašanje {items[stageIdx]?.n} v „{items[stageIdx]?.category}“)
+                </button>
+              )}
+              <div className="mb-4 rounded-xl border border-gray-200 p-3 dark:border-gray-800">
+                <p className="whitespace-pre-line text-sm">{plainPrompt(current.prompt)}</p>
+                <p className="mt-2 text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+                  ✓ {correctText(current)}
+                </p>
+              </div>
+              <ul className="grid gap-2 2xl:grid-cols-2">
+                {teams.map((t) => (
+                  <MarkRow
+                    key={t.id}
+                    label={t.name}
+                    sub={`skupaj ${fmt(teamScore(t.id))} t.`}
+                    q={current}
+                    value={entry(t.id, current.id)}
+                    onChange={(v, parts) => void mark(t.id, current, v, parts)}
+                  />
+                ))}
+              </ul>
+              {teams.some((t) => entry(t.id, current.id).correct === null) && (
+                <Button
+                  variant="ghost"
+                  className="mt-3 w-full"
+                  onClick={() => {
+                    teams
+                      .filter((t) => entry(t.id, current.id).correct === null)
+                      .forEach((t) => {
+                        const p = entry(t.id, current.id).parts;
+                        void mark(t.id, current, false, p ? p.map((x) => x ?? false) : null);
+                      });
+                  }}
+                >
+                  Neoznačene → narobe
+                </Button>
+              )}
+            </section>
+          )}
+
+          {activeView === "team" && team && cat && (
+            <section>
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {teams.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTeamId(t.id)}
+                    className={clsx(
+                      "rounded-full border px-3 py-1 text-sm",
+                      t.id === team.id
+                        ? "border-violet-600 bg-violet-600 text-white"
+                        : "border-gray-300 dark:border-gray-700",
+                    )}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+              <select
+                value={cat.id}
+                onChange={(e) => setCatId(e.target.value)}
+                className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
               >
-                {t.name}
-              </button>
-            ))}
-          </div>
-          <select
-            value={cat.id}
-            onChange={(e) => setCatId(e.target.value)}
-            className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
-          >
-            {categories.map((c, i) => (
-              <option key={c.id} value={c.id}>
-                {i + 1}. {c.name}
-              </option>
-            ))}
-          </select>
-          <div className="mb-2 flex justify-between text-sm text-gray-500 dark:text-gray-400">
-            <span>
-              {team.name} · {cat.name}
-            </span>
-            <span>
-              {fmt(teamScore(team.id, cat.items))} t. · skupaj{" "}
-              <b className="text-gray-900 dark:text-gray-100">{fmt(teamScore(team.id))}</b>
-            </span>
-          </div>
-          <ul className="space-y-2">
-            {cat.items.map((q) => (
-              <MarkRow
-                key={q.id}
-                label={`${q.n}. ${plainPrompt(q.prompt)}`}
-                sub={`✓ ${correctText(q)}`}
-                q={q}
-                value={entry(team.id, q.id)}
-                onChange={(v, parts) => void mark(team.id, q, v, parts)}
-              />
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {activeView === "total" && teams.length > 0 && (
-        <section className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-gray-500 dark:text-gray-400">
-                <th className="py-2 pr-2">#</th>
-                <th className="py-2 pr-2">Ekipa</th>
                 {categories.map((c, i) => (
-                  <th key={c.id} className="px-1 py-2 text-right" title={c.name}>
-                    K{i + 1}
-                  </th>
+                  <option key={c.id} value={c.id}>
+                    {i + 1}. {c.name}
+                  </option>
                 ))}
-                <th className="py-2 pl-2 text-right">Skupaj</th>
-              </tr>
-            </thead>
-            <tbody>
-              {[...teams]
-                .map((t) => ({ t, total: teamScore(t.id) }))
-                .sort((a, b) => b.total - a.total)
-                .map(({ t, total }, i, arr) => (
-                  <tr key={t.id} className="border-t border-gray-200 dark:border-gray-800">
-                    <td className="py-2 pr-2 text-gray-500">{arr.findIndex((x) => x.total === total) + 1}.</td>
-                    <td className="py-2 pr-2 font-medium">{t.name}</td>
-                    {categories.map((c) => (
-                      <td key={c.id} className="px-1 py-2 text-right tabular-nums text-gray-600 dark:text-gray-300">
-                        {fmt(teamScore(t.id, c.items))}
-                      </td>
+              </select>
+              <div className="mb-2 flex justify-between text-sm text-gray-500 dark:text-gray-400">
+                <span>
+                  {team.name} · {cat.name}
+                </span>
+                <span>
+                  {fmt(teamScore(team.id, cat.items))} t. · skupaj{" "}
+                  <b className="text-gray-900 dark:text-gray-100">{fmt(teamScore(team.id))}</b>
+                </span>
+              </div>
+              <ul className="space-y-2">
+                {cat.items.map((q) => (
+                  <MarkRow
+                    key={q.id}
+                    label={`${q.n}. ${plainPrompt(q.prompt)}`}
+                    sub={`✓ ${correctText(q)}`}
+                    q={q}
+                    value={entry(team.id, q.id)}
+                    onChange={(v, parts) => void mark(team.id, q, v, parts)}
+                  />
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {activeView === "total" && teams.length > 0 && (
+            <section className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 dark:text-gray-400">
+                    <th className="py-2 pr-2">#</th>
+                    <th className="py-2 pr-2">Ekipa</th>
+                    {categories.map((c, i) => (
+                      <th key={c.id} className="px-1 py-2 text-right" title={c.name}>
+                        K{i + 1}
+                      </th>
                     ))}
-                    <td className="py-2 pl-2 text-right text-base font-bold tabular-nums">{fmt(total)}</td>
+                    <th className="py-2 pl-2 text-right">Skupaj</th>
                   </tr>
-                ))}
-            </tbody>
-          </table>
-          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-            {categories.map((c, i) => `K${i + 1} = ${c.name}`).join(" · ")}
-          </p>
-        </section>
-      )}
+                </thead>
+                <tbody>
+                  {[...teams]
+                    .map((t) => ({ t, total: teamScore(t.id) }))
+                    .sort((a, b) => b.total - a.total)
+                    .map(({ t, total }, i, arr) => (
+                      <tr key={t.id} className="border-t border-gray-200 dark:border-gray-800">
+                        <td className="py-2 pr-2 text-gray-500">{arr.findIndex((x) => x.total === total) + 1}.</td>
+                        <td className="py-2 pr-2 font-medium">{t.name}</td>
+                        {categories.map((c) => (
+                          <td key={c.id} className="px-1 py-2 text-right tabular-nums text-gray-600 dark:text-gray-300">
+                            {fmt(teamScore(t.id, c.items))}
+                          </td>
+                        ))}
+                        <td className="py-2 pl-2 text-right text-base font-bold tabular-nums">{fmt(total)}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+              <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                {categories.map((c, i) => `K${i + 1} = ${c.name}`).join(" · ")}
+              </p>
+            </section>
+          )}
+        </div>
+      </div>
     </Shell>
   );
 }
 
-function Shell({ room, children }: { room: KvizRoom; children: React.ReactNode }) {
+// Časovnica za točkovanje: vrstica na kategorijo, krogec na vprašanje.
+// Zelen = ocenjeno, oranžen = delno, siv = neocenjeno; obroba = izbrano,
+// pikica = vprašanje, ki je trenutno na odru. Klik preskoči samo točkovanje,
+// oder ostane, kjer je.
+function ScoreTimeline({
+  categories,
+  stageIdx,
+  isSelected,
+  status,
+  onPick,
+}: {
+  categories: { id: string; name: string; items: Item[] }[];
+  stageIdx: number;
+  isSelected: (q: Item) => boolean;
+  status: (q: Item) => 0 | 1 | 2;
+  onPick: (q: Item) => void;
+}) {
   return (
-    <div className="mx-auto w-full max-w-2xl px-4 py-4">
-      <header className="mb-4 flex items-center gap-3">
-        <Link
-          href={`/oder/${room.code}`}
-          className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
-          aria-label="Na oder"
-        >
-          <IconArrowLeft className="h-5 w-5" />
-        </Link>
-        <div className="min-w-0">
-          <h1 className="truncate font-semibold">Točkovanje · {room.title}</h1>
-          <p className="text-xs text-gray-500 dark:text-gray-400">
-            Soba <span className="font-mono tracking-widest">{room.code}</span>
-          </p>
+    <nav
+      aria-label="Časovnica vprašanj"
+      className="mb-4 space-y-0.5 rounded-xl border border-gray-200 p-2 lg:sticky lg:top-24 lg:mb-0 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden dark:border-gray-800"
+    >
+      {categories.map((c, ci) => {
+        const catSelected = c.items.some(isSelected);
+        return (
+          <div
+            key={c.id}
+            className={clsx("rounded-lg px-2 py-1.5", catSelected && "bg-violet-50 dark:bg-violet-950/40")}
+          >
+            <button
+              type="button"
+              onClick={() => onPick(c.items[0])}
+              title={c.name}
+              className={clsx(
+                "mb-1 block w-full truncate text-left text-xs font-semibold",
+                catSelected ? "text-violet-600 dark:text-violet-400" : "text-gray-500 dark:text-gray-400",
+              )}
+            >
+              {ci + 1}. {c.name}
+            </button>
+            <div className="flex flex-wrap gap-1">
+              {c.items.map((q) => {
+                const s = status(q);
+                const sel = isSelected(q);
+                return (
+                  <button
+                    key={q.id}
+                    type="button"
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      onPick(q);
+                    }}
+                    title={`${c.name} · vprašanje ${q.n}${q.index === stageIdx ? " (na odru)" : ""}`}
+                    aria-label={`${c.name}, vprašanje ${q.n}`}
+                    aria-current={sel ? "step" : undefined}
+                    className={clsx(
+                      "relative flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold tabular-nums transition-colors",
+                      s === 2
+                        ? "bg-emerald-500 text-white"
+                        : s === 1
+                          ? "bg-amber-400 text-amber-950"
+                          : "bg-gray-200 text-gray-600 hover:bg-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700",
+                      sel &&
+                        "ring-2 ring-violet-600 ring-offset-2 ring-offset-white dark:ring-violet-400 dark:ring-offset-gray-950",
+                    )}
+                  >
+                    {q.n}
+                    {q.index === stageIdx && (
+                      <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-cyan-500 dark:border-gray-950" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      <div className="flex flex-wrap gap-x-3 gap-y-1 px-1 pt-1 text-[11px] text-gray-500 dark:text-gray-400">
+        <span className="flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" /> ocenjeno
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-full bg-amber-400" /> delno
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-full bg-cyan-500" /> na odru
+        </span>
+      </div>
+    </nav>
+  );
+}
+
+function Shell({ room, toolbar, children }: { room: KvizRoom; toolbar?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="w-full px-4 pb-6 lg:px-6">
+      <header className="sticky top-0 z-20 -mx-4 mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-200 bg-gray-50/90 px-4 py-3 backdrop-blur lg:-mx-6 lg:px-6 dark:border-gray-800 dark:bg-gray-950/90">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Link
+            href={`/oder/${room.code}`}
+            className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800"
+            aria-label="Na oder"
+          >
+            <IconArrowLeft className="h-5 w-5" />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="truncate font-semibold">Točkovanje · {room.title}</h1>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Soba <span className="font-mono tracking-widest">{room.code}</span>
+            </p>
+          </div>
         </div>
+        {toolbar}
       </header>
       {children}
     </div>
