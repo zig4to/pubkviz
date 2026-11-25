@@ -43,3 +43,6 @@ next-env.d.ts
 
 # supabase cli
 /supabase/.temp/
+
+# zvočni posnetki (izvirniki in izrezi za kviz, avtorsko zaščiteni)
+/posnetki/

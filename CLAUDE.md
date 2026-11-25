@@ -60,6 +60,15 @@ Ni testov. Za preizkus igre s telefonom na istem Wi-Fi odpri
 | `0004_team_rename` | `kviz_rename_team` (žeton, samo v lobiju, unikatno ime) | izvedena 2026-11-09 (`kviz_team_rename`) |
 | `0005_reveal_per_category` | nov `kviz_next`: razkritje odgovorov na koncu kategorije | izvedena 2026-11-09 (`kviz_reveal_per_category`) |
 | `0006_category_notes` | `kviz_categories.notes` (stikalo „Beležka“ v urejevalniku); `kviz_snapshot` vrača še `category_id`, `notes`. Beležka igralca živi samo v localStorage `kviz-notes-<KODA>` (`notesStore` v `lib/kviz.ts`), ne šteje kot odgovor | izvedena 2026-11-18 (`kviz_category_notes`) |
+| `0007_classic_mode` | način igre `mode` (`phone`/`classic`) na `kviz_quizzes` (stikalo v urejevalniku), ob `kviz_open_room` kopiran v `kviz_rooms.mode`. Klasični `kviz_next`: lobby → vprašanja → `scoreboard` (premor „Oddajte listke“, brez točk) → … → finished, brez razkritja. `kviz_join` zavrne klasično sobo | izvedena 2026-11-22 (`kviz_classic_mode`) |
+| `0008_goto_question` | `kviz_goto(room, index)` za časovnico na odru: skok na vprašanje (stanje `question`; med razkritjem v isti kategoriji ostane `reveal`) | izvedena 2026-11-22 (`kviz_goto_question`) |
+| `0009_category_intro` | stanje `intro` pred vsako kategorijo (uvodni zaslon: ime + `kviz_categories.image_path` ali ilustracija). `current` v `intro` je `kviz_intro_snapshot` — brez vprašanja (telefoni ga ne vidijo prezgodaj); `q_index` že kaže na prvo vprašanje kategorije | izvedena 2026-11-22 (`kviz_category_intro`) |
+| `0010_category_example` | `kviz_categories.example` jsonb `{rules, items:[{q,a}], answer}` — primer „Kako se igra?“ po uvodu kategorije; koraka (primer → rešitev) teče samo oder znotraj stanja `intro` (`introStep` v `Stage.tsx`). Urejevalnika še ni, vpisano ročno (Nadpomenka v „Testni kviz 3“) | izvedena 2026-11-22 (`kviz_category_example`) |
+| `0011_goto_intro` | `kviz_goto(room, index, p_intro)`: s `p_intro` na prvo vprašanje kategorije skoči na njen uvod (`intro`). Časovnica: klik na ime kategorije ali na krogec 1 druge kategorije → uvod | izvedena 2026-11-22 (`kviz_goto_intro`) |
+| `0012_category_summary` | `kviz_categories.summary` (stikalo „Pregled“): po zadnjem vprašanju kategorije oder (korak, samo na odru) pokaže vsa vprašanja naenkrat brez slik/odgovorov. Klasični kviz ima po „Oddajte listke“ še pregled pravilnih odgovorov (oder bere `kviz_questions` kot lastnik) | izvedena 2026-11-22 (`kviz_category_summary`) |
+| `0013_question_audio` | `kviz_questions.audio_path` (posnetek v bucketu `kviz`, ki sprejme še audio do 15 MB); `kviz_snapshot` ga vrača, `kviz_intro_snapshot` ne. Oder: `AudioPlayer` v `Stage.tsx` (velik gumb, tipka P), urejevalnik: „Dodaj posnetek“ | izvedena 2026-11-22 (`kviz_question_audio`) |
+| `0014_question_explanation` | `kviz_questions.explanation` (≤ 300 znakov): pojasnilo, ki ga oder pokaže samo v pregledu odgovorov pod vprašanjem (ni v `kviz_snapshot`) | izvedena 2026-11-24 (`kviz_question_explanation`) |
+| `0015_host_scoring` | točkovanje klasičnega kviza (`/oder/KODA/tocke`, `components/scoring/Scoring.tsx`): voditelj ustvari ekipe (`kviz_host_add_team`/`_rename_team`/`_delete_team`) in kljuka ✓/✗ (`kviz_host_mark` → `kviz_answers.is_correct`, `points` = točke vprašanja). Samo `mode = 'classic'`. Še `kviz_saved_teams` (izžrebane ekipe voditelja za vse kvize; `kviz_save_teams` ob vsakem žrebu zamenja nabor, admin jih pokaže nad kvizi in izbriše, `kviz_host_import_teams` jih doda v sobo). Delne točke: `kviz_questions.parts` (oznake delov, vsak vreden `points / n`; miksi v „Ugani miks skladb“ = 4 × ½), `kviz_answers.points` je `numeric`, `kviz_answers.parts` ocena po delih. Urejevalnik `parts` še ne zna, vpisano z migracijo | izvedena 2026-11-25 (`kviz_host_scoring`) |
 
 `src/lib/types/database.types.ts` je **ročno napisan** — ob novi migraciji ga
 posodobi. Migracije prek Supabase MCP `apply_migration` (Žiga mora odobriti).
@@ -75,9 +84,9 @@ localStorage `kviz-token-<KODA>`) in vse dela prek security definer RPC z
 
 ### Potek igre (`kviz_next`, en gumb)
 
-`lobby → question → question → … (vsa vprašanja kategorije, brez razkritja)
-→ reveal (1. vpr. kategorije) → reveal → … → scoreboard → question … →
-finished` (od `0005`). Ko gre voditelj naprej, je prejšnje vprašanje zaprto;
+`lobby → intro → question → question → … (vsa vprašanja kategorije, brez razkritja)
+→ reveal (1. vpr. kategorije) → reveal → … → scoreboard → intro → question … →
+finished` (od `0005`, `intro` od `0009`; klasični način brez `reveal`). Ko gre voditelj naprej, je prejšnje vprašanje zaprto;
 `kviz_grade` oceni vprašanje šele ob njegovem razkritju. Ob odprtju sobe se vrstni red vprašanj
 zamrzne v `kviz_rooms.question_ids` (kategorija.position, vprašanje.position).
 `current` je očiščen posnetek vprašanja (brez pravilnega odgovora), `reveal`
@@ -97,7 +106,8 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
 
 - `/zrebanje` (gumb „Žrebaj skupine“ na `/`, javno): naključna razporeditev
   udeležencev v skupine izbrane velikosti — samo v brskalniku
-  (`components/draw/TeamDraw.tsx`, imena v localStorage `kviz-zrebanje`), brez baze.
+  (`components/draw/TeamDraw.tsx`, imena v localStorage `kviz-zrebanje`). Če je
+  voditelj prijavljen, se izžrebane ekipe shranijo v `kviz_saved_teams` (0015).
 
 - `src/lib/supabase/middleware.ts`: `/` in `/igra/*` sta javna, `/login` in
   `/registracija` preusmerita prijavljene na `/admin`, vse ostalo zahteva
@@ -114,6 +124,10 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
 
 ## Stanje podatkov (2026-11-09)
 
+- 2026-11-22: „Garaža pub kviz“ (klasični, 10 kategorij, 55 vprašanj, vsaka
+  kategorija ima `example` — oblike `choice` / `items` / `items`+`answer`, glej
+  `CategoryExample`). Kategorija 4 „Ugani miks skladb“ ima 5 začasnih vprašanj
+  (`(dopolni)`), prava pridejo kasneje.
 - Žiga ima „Demo pub kviz“ (2 kategoriji, 4 vprašanja) ter „Testni kviz 1 –
   Svet“ in „Testni kviz 2 – Mešano“ (vsak 2 kategoriji, 5 vprašanj) za preizkus.
 

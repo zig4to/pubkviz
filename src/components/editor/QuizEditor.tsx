@@ -4,8 +4,8 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { LETTERS, errorText } from "@/lib/kviz";
-import type { KvizCategory, KvizQuestion, KvizQuiz } from "@/lib/types/database.types";
+import { LETTERS, errorText, imageUrl } from "@/lib/kviz";
+import type { KvizCategory, KvizQuestion, KvizQuiz, QuizMode } from "@/lib/types/database.types";
 import Button from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import {
@@ -17,6 +17,7 @@ import {
   IconPencil,
   IconPlus,
   IconTrash,
+  IconX,
 } from "@/components/ui/icons";
 import clsx from "@/lib/utils/clsx";
 import QuestionDialog from "./QuestionDialog";
@@ -62,6 +63,21 @@ export default function QuizEditor({
     setTitle(t);
   };
 
+  const [mode, setMode] = useState<QuizMode>(quiz.mode ?? "phone");
+  const saveMode = async (m: QuizMode) => {
+    if (m === mode) return;
+    const prev = mode;
+    setMode(m);
+    const { error } = await supabase
+      .from("kviz_quizzes")
+      .update({ mode: m, updated_at: new Date().toISOString() })
+      .eq("id", quiz.id);
+    if (error) {
+      setMode(prev);
+      fail(error);
+    }
+  };
+
   const addCategory = async () => {
     const position = cats.length ? Math.max(...cats.map((c) => c.position)) + 1 : 0;
     const { data, error } = await supabase
@@ -86,6 +102,35 @@ export default function QuizEditor({
     const { error } = await supabase.from("kviz_categories").update({ notes }).eq("id", cat.id);
     if (error) return fail(error);
     setCats((cs) => cs.map((c) => (c.id === cat.id ? { ...c, notes } : c)));
+  };
+
+  // Slika za uvodni zaslon kategorije (stara se pobriše iz bucketa).
+  const [uploadingCat, setUploadingCat] = useState<string | null>(null);
+  const setCategoryImage = async (cat: KvizCategory, file: File | null) => {
+    let path: string | null = null;
+    if (file) {
+      if (file.size > 5 * 1024 * 1024) return setError("Slika je večja od 5 MB.");
+      setUploadingCat(cat.id);
+      const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "");
+      path = `${quiz.owner_id}/${crypto.randomUUID()}.${ext}`;
+      const up = await supabase.storage.from("kviz").upload(path, file, { contentType: file.type });
+      setUploadingCat(null);
+      if (up.error) return fail(up.error);
+    }
+    const { error } = await supabase.from("kviz_categories").update({ image_path: path }).eq("id", cat.id);
+    if (error) {
+      if (path) void supabase.storage.from("kviz").remove([path]);
+      return fail(error);
+    }
+    if (cat.image_path) void supabase.storage.from("kviz").remove([cat.image_path]);
+    setCats((cs) => cs.map((c) => (c.id === cat.id ? { ...c, image_path: path } : c)));
+  };
+
+  const toggleSummary = async (cat: KvizCategory) => {
+    const summary = !cat.summary;
+    const { error } = await supabase.from("kviz_categories").update({ summary }).eq("id", cat.id);
+    if (error) return fail(error);
+    setCats((cs) => cs.map((c) => (c.id === cat.id ? { ...c, summary } : c)));
   };
 
   const deleteCategory = async (cat: KvizCategory) => {
@@ -168,6 +213,38 @@ export default function QuizEditor({
         </Button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 text-sm">
+        <span className="text-gray-500 dark:text-gray-400">Način igre:</span>
+        <div role="radiogroup" aria-label="Način igre" className="inline-flex rounded-lg border border-gray-300 p-0.5 dark:border-gray-700">
+          {(
+            [
+              ["phone", "Telefonski"],
+              ["classic", "Klasični"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              role="radio"
+              aria-checked={mode === m}
+              onClick={() => saveMode(m)}
+              className={clsx(
+                "rounded-md px-3 py-1.5 font-medium transition-colors",
+                mode === m
+                  ? "bg-violet-600 text-white"
+                  : "text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800"
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          {mode === "phone"
+            ? "Ekipe odgovarjajo na telefonih, oder razkrije odgovore in lestvico."
+            : "Ekipe pišejo na listke; na odru so samo vprašanja in možnosti, brez pravilnih odgovorov."}
+        </span>
+      </div>
+
       {error && (
         <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p>
       )}
@@ -201,6 +278,62 @@ export default function QuizEditor({
                 <IconNotebook />
                 <span className="hidden sm:inline">Beležka</span>
               </button>
+              <button
+                className={clsx(
+                  "rounded-md px-2 py-1 text-xs font-medium",
+                  cat.summary
+                    ? "bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300"
+                    : "text-gray-400 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+                )}
+                aria-pressed={cat.summary}
+                title="Pregled: po zadnjem vprašanju kategorije oder pokaže vsa vprašanja naenkrat (brez slik in odgovorov)."
+                onClick={() => toggleSummary(cat)}
+              >
+                Pregled
+              </button>
+              {cat.image_path ? (
+                <span className="flex items-center gap-0.5">
+                  <label
+                    title="Slika na uvodnem zaslonu kategorije — klik za zamenjavo"
+                    className="cursor-pointer rounded-md p-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={imageUrl(cat.image_path) ?? ""} alt="" className="h-7 w-10 rounded object-cover" />
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = "";
+                        if (f) void setCategoryImage(cat, f);
+                      }}
+                    />
+                  </label>
+                  <button className={ICON_BTN} aria-label="Odstrani sliko kategorije" title="Odstrani sliko" onClick={() => setCategoryImage(cat, null)}>
+                    <IconX className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ) : (
+                <label
+                  title="Slika na uvodnem zaslonu kategorije (brez nje se pokaže ilustracija)"
+                  className={clsx(ICON_BTN, "flex cursor-pointer items-center gap-1 px-2 py-1 text-xs font-medium")}
+                >
+                  <IconImage />
+                  <span className="hidden sm:inline">{uploadingCat === cat.id ? "Nalagam …" : "Slika"}</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif"
+                    className="hidden"
+                    disabled={uploadingCat === cat.id}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      e.target.value = "";
+                      if (f) void setCategoryImage(cat, f);
+                    }}
+                  />
+                </label>
+              )}
               <button className={ICON_BTN} disabled={ci === 0} aria-label="Gor" onClick={() => swap("kviz_categories", sortedCats, ci, ci - 1, setCats)}>
                 <IconArrowUp />
               </button>

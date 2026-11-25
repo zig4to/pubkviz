@@ -5,14 +5,15 @@ export const metadata = { title: "Kvizi — Garaža pub kviz" };
 
 export default async function Admin() {
   const supabase = await createClient();
-  const [quizzes, questions, rooms] = await Promise.all([
+  const [quizzes, questions, rooms, savedTeams] = await Promise.all([
     supabase.from("kviz_quizzes").select("*").order("updated_at", { ascending: false }),
     supabase.from("kviz_questions").select("quiz_id"),
     supabase
       .from("kviz_rooms")
-      .select("id, code, title, state, q_index, question_ids, created_at")
+      .select("id, code, title, state, mode, q_index, question_ids, created_at")
       .neq("state", "finished")
       .order("created_at", { ascending: false }),
+    supabase.from("kviz_saved_teams").select("id, name, members").order("position"),
   ]);
 
   const counts: Record<string, number> = {};
@@ -20,12 +21,14 @@ export default async function Admin() {
 
   return (
     <AdminHome
+      savedTeams={savedTeams.data ?? []}
       quizzes={(quizzes.data ?? []).map((q) => ({ ...q, questionCount: counts[q.id] ?? 0 }))}
       rooms={(rooms.data ?? []).map((r) => ({
         id: r.id,
         code: r.code,
         title: r.title,
         state: r.state,
+        mode: r.mode,
         progress: `${Math.max(0, r.q_index + 1)}/${r.question_ids.length}`,
       }))}
     />

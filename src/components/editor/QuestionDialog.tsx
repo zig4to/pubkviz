@@ -10,7 +10,8 @@ import { Field, Input, Label, Textarea } from "@/components/ui/Input";
 import { IconImage, IconTrash } from "@/components/ui/icons";
 import clsx from "@/lib/utils/clsx";
 
-const MAX_IMAGE = 5 * 1024 * 1024; // = file_size_limit bucketa `kviz`
+const MAX_IMAGE = 5 * 1024 * 1024;
+const MAX_AUDIO = 15 * 1024 * 1024; // = file_size_limit bucketa `kviz` (0013)
 
 export default function QuestionDialog({
   ownerId,
@@ -31,6 +32,8 @@ export default function QuestionDialog({
 }) {
   const supabase = useMemo(() => createClient(), []);
   const fileRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLInputElement>(null);
+  const [audioPath, setAudioPath] = useState<string | null>(question?.audio_path ?? null);
   const [type, setType] = useState<QuestionType>(question?.type ?? "choice");
   const [prompt, setPrompt] = useState(question?.prompt ?? "");
   const [options, setOptions] = useState<string[]>(() => {
@@ -41,6 +44,7 @@ export default function QuestionDialog({
   const [correct, setCorrect] = useState(question?.correct_index ?? 0);
   const [accepted, setAccepted] = useState((question?.accepted_answers ?? []).join("\n"));
   const [points, setPoints] = useState(question?.points ?? 1);
+  const [explanation, setExplanation] = useState(question?.explanation ?? "");
   const [imagePath, setImagePath] = useState<string | null>(question?.image_path ?? null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -58,6 +62,19 @@ export default function QuestionDialog({
     // Prejšnjo neshranjeno sliko (naloženo v tem oknu) pobriši.
     if (imagePath && imagePath !== question?.image_path) void supabase.storage.from("kviz").remove([imagePath]);
     setImagePath(path);
+  };
+
+  const uploadAudio = async (file: File) => {
+    if (file.size > MAX_AUDIO) return setError("Posnetek je večji od 15 MB.");
+    setUploading(true);
+    setError(null);
+    const ext = (file.name.split(".").pop() || "mp3").toLowerCase().replace(/[^a-z0-9]/g, "");
+    const path = `${ownerId}/${crypto.randomUUID()}.${ext}`;
+    const { error } = await supabase.storage.from("kviz").upload(path, file, { contentType: file.type || "audio/mpeg" });
+    setUploading(false);
+    if (error) return setError(errorText(error));
+    if (audioPath && audioPath !== question?.audio_path) void supabase.storage.from("kviz").remove([audioPath]);
+    setAudioPath(path);
   };
 
   const save = async () => {
@@ -89,6 +106,8 @@ export default function QuestionDialog({
       accepted_answers: acc,
       points,
       image_path: imagePath,
+      audio_path: audioPath,
+      explanation: explanation.trim() || null,
     };
 
     setSaving(true);
@@ -104,11 +123,15 @@ export default function QuestionDialog({
     if (question?.image_path && question.image_path !== imagePath) {
       void supabase.storage.from("kviz").remove([question.image_path]);
     }
+    if (question?.audio_path && question.audio_path !== audioPath) {
+      void supabase.storage.from("kviz").remove([question.audio_path]);
+    }
     onSaved(res.data);
   };
 
   const close = () => {
     if (imagePath && imagePath !== question?.image_path) void supabase.storage.from("kviz").remove([imagePath]);
+    if (audioPath && audioPath !== question?.audio_path) void supabase.storage.from("kviz").remove([audioPath]);
     onClose();
   };
 
@@ -168,6 +191,49 @@ export default function QuestionDialog({
               const f = e.target.files?.[0];
               e.target.value = "";
               if (f) void upload(f);
+            }}
+          />
+        </div>
+
+        <Field label="Pojasnilo (neobvezno, pokaže se samo v pregledu odgovorov)" htmlFor="q-explanation">
+          <Input
+            id="q-explanation"
+            value={explanation}
+            placeholder="npr. „S'all good, man“ („vse je v redu, stari“)."
+            onChange={(e) => setExplanation(e.target.value.slice(0, 300))}
+          />
+        </Field>
+
+        <div>
+          <Label>Zvočni posnetek (neobvezno, oder pokaže velik gumb za predvajanje)</Label>
+          {audioPath ? (
+            <div className="flex items-center gap-3">
+              <audio controls src={imageUrl(audioPath) ?? undefined} className="h-10 min-w-0 flex-1" />
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => {
+                  if (audioPath !== question?.audio_path) void supabase.storage.from("kviz").remove([audioPath]);
+                  setAudioPath(null);
+                }}
+              >
+                <IconTrash /> Odstrani
+              </Button>
+            </div>
+          ) : (
+            <Button type="button" variant="secondary" disabled={uploading} onClick={() => audioRef.current?.click()}>
+              {uploading ? "Nalagam …" : "Dodaj posnetek (MP3)"}
+            </Button>
+          )}
+          <input
+            ref={audioRef}
+            type="file"
+            accept="audio/mpeg,audio/mp4,audio/x-m4a,audio/wav,audio/ogg,.mp3,.m4a,.wav,.ogg"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void uploadAudio(f);
             }}
           />
         </div>

@@ -133,6 +133,8 @@ export default function PlayClient({ code }: { code: string }) {
         />
       ) : room.state === "reveal" && room.current ? (
         <RevealView state={state} />
+      ) : room.state === "intro" && room.current ? (
+        <IntroView state={state} />
       ) : (
         <ScoresView state={state} />
       )}
@@ -621,6 +623,23 @@ function RevealView({ state }: { state: PlayerState }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// Uvod kategorije (stanje `intro`): vprašanje še ni odprto.
+function IntroView({ state }: { state: PlayerState }) {
+  const c = state.room.current!;
+  const count = c.category_questions;
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 py-10 text-center">
+      <div className="text-xs font-bold uppercase tracking-[0.3em] text-cyan-600 dark:text-cyan-300">
+        Kategorija {c.category_index} od {c.category_total}
+      </div>
+      <h2 className="break-words text-4xl font-black leading-tight">{c.category}</h2>
+      <p className="text-gray-600 dark:text-gray-300">
+        {count} {count === 1 ? "vprašanje" : count === 2 ? "vprašanji" : count < 5 ? "vprašanja" : "vprašanj"} · prvo vprašanje sledi …
+      </p>
     </div>
   );
 }

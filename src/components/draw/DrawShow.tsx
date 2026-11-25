@@ -31,10 +31,13 @@ function makeBurst(): Particle[] {
 
 export default function DrawShow({
   groups,
+  labels,
   onClose,
   onRedraw,
 }: {
   groups: string[][];
+  /** Ime vsake skupine (enako dolgo kot `groups`). */
+  labels: string[];
   onClose: () => void;
   onRedraw: () => void;
 }) {
@@ -88,7 +91,7 @@ export default function DrawShow({
   }, [next, onClose]);
 
   const copy = async () => {
-    const out = groups.map((g, i) => `Skupina ${i + 1}: ${g.join(", ")}`).join("\n");
+    const out = groups.map((g, i) => (labels[i] !== `Skupina ${i + 1}` ? `Skupina ${i + 1} – ${labels[i]}` : labels[i]) + `: ${g.join(", ")}`).join("\n");
     try {
       await navigator.clipboard.writeText(out);
       setCopied(true);
@@ -98,6 +101,8 @@ export default function DrawShow({
 
   const revealed = phase === "done" ? groups.length : phase === "land" ? idx + 1 : Math.max(0, idx);
   const current = idx >= 0 ? groups[idx] : null;
+  // Nad lastnim imenom skupine pokaži še zaporedno številko („Skupina 1:“).
+  const numbered = (i: number) => (labels[i] !== `Skupina ${i + 1}` ? `Skupina ${i + 1}:` : null);
 
   return (
     <div
@@ -129,7 +134,8 @@ export default function DrawShow({
                 className="draw-pop rounded-2xl bg-white/10 p-5 ring-1 ring-white/15"
                 style={{ animationDelay: `${i * 90}ms` }}
               >
-                <div className="mb-2 text-sm font-bold uppercase tracking-wider text-cyan-300">Skupina {i + 1}</div>
+                {numbered(i) && <div className="text-xs font-semibold uppercase tracking-wider text-white/50">{numbered(i)}</div>}
+                <div className="mb-2 text-sm font-bold uppercase tracking-wider text-cyan-300">{labels[i]}</div>
                 <ul className="space-y-1 text-xl font-semibold">
                   {g.map((n, j) => (
                     <li key={j}>{n}</li>
@@ -170,7 +176,12 @@ export default function DrawShow({
 
           {phase === "spin" && (
             <div className="space-y-6">
-              <div className="text-xl font-bold uppercase tracking-[0.3em] text-cyan-300 sm:text-3xl">Skupina {idx + 1}</div>
+              <div>
+                {numbered(idx) && (
+                  <div className="text-base font-semibold uppercase tracking-[0.3em] text-white/50 sm:text-xl">{numbered(idx)}</div>
+                )}
+                <div className="text-xl font-bold uppercase tracking-[0.3em] text-cyan-300 sm:text-3xl">{labels[idx]}</div>
+              </div>
               <div className="draw-pulse mx-auto flex min-h-[1.6em] min-w-[8ch] items-center justify-center rounded-3xl bg-white/10 px-10 py-6 text-[clamp(2.5rem,8vw,6.5rem)] font-black leading-none ring-2 ring-violet-500/60">
                 <span className="blur-[1px]">{spinName}</span>
               </div>
@@ -199,8 +210,15 @@ export default function DrawShow({
                   />
                 ))}
               </div>
-              <div className="draw-land text-[clamp(1.75rem,5vw,4rem)] font-black uppercase tracking-wider text-cyan-300">
-                Skupina {idx + 1}
+              <div className="draw-land">
+                {numbered(idx) && (
+                  <div className="text-[clamp(1rem,2.2vw,1.75rem)] font-bold uppercase tracking-[0.25em] text-white/60">
+                    {numbered(idx)}
+                  </div>
+                )}
+                <div className="text-[clamp(1.75rem,5vw,4rem)] font-black uppercase tracking-wider text-cyan-300">
+                  {labels[idx]}
+                </div>
               </div>
               <ul className="flex flex-wrap justify-center gap-3 sm:gap-4">
                 {current.map((n, j) => (
@@ -228,7 +246,10 @@ export default function DrawShow({
         <footer className="flex gap-2 overflow-x-auto px-4 pb-4 sm:px-6">
           {groups.slice(0, phase === "land" ? idx : revealed).map((g, i) => (
             <div key={i} className={clsx("shrink-0 rounded-xl bg-white/10 px-3 py-2 text-left text-sm ring-1 ring-white/10")}>
-              <div className="text-xs font-bold text-cyan-300">Skupina {i + 1}</div>
+              <div className="text-xs font-bold text-cyan-300">
+                {numbered(i) && <span className="font-semibold text-white/50">{numbered(i)} </span>}
+                {labels[i]}
+              </div>
               <div className="max-w-[16rem] truncate text-white/80">{g.join(", ")}</div>
             </div>
           ))}

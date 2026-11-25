@@ -5,22 +5,33 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { errorText } from "@/lib/kviz";
-import type { KvizQuiz, RoomState } from "@/lib/types/database.types";
+import type { KvizQuiz, QuizMode, RoomState } from "@/lib/types/database.types";
 import Button from "@/components/ui/Button";
-import { IconPencil, IconPlus, IconChevronRight, IconShuffle } from "@/components/ui/icons";
+import { IconPencil, IconPlus, IconChevronRight, IconShuffle, IconTrash } from "@/components/ui/icons";
 
 type QuizItem = KvizQuiz & { questionCount: number };
-type RoomItem = { id: string; code: string; title: string; state: RoomState; progress: string };
+type RoomItem = { id: string; code: string; title: string; state: RoomState; mode: QuizMode; progress: string };
 
 const STATE_LABEL: Record<RoomState, string> = {
   lobby: "čaka igralce",
+  intro: "uvod kategorije",
   question: "vprašanje",
   reveal: "razkritje",
   scoreboard: "lestvica",
   finished: "končana",
 };
 
-export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; rooms: RoomItem[] }) {
+type SavedTeam = { id: string; name: string; members: string[] };
+
+export default function AdminHome({
+  quizzes,
+  rooms,
+  savedTeams,
+}: {
+  quizzes: QuizItem[];
+  rooms: RoomItem[];
+  savedTeams: SavedTeam[];
+}) {
   const router = useRouter();
   const supabase = createClient();
   const [busy, setBusy] = useState<string | null>(null);
@@ -51,6 +62,16 @@ export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; roo
     router.refresh();
   };
 
+  const clearTeams = async () => {
+    if (!window.confirm("Izbrišem izžrebane ekipe? V že odprtih igrah ostanejo.")) return;
+    setBusy("teams");
+    setError(null);
+    const { error } = await supabase.from("kviz_saved_teams").delete().not("id", "is", null);
+    setBusy(null);
+    if (error) setError(errorText(error));
+    router.refresh();
+  };
+
   return (
     <div className="space-y-8">
       {error && (
@@ -78,6 +99,14 @@ export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; roo
                 <Button variant="ghost" disabled={busy === r.id} onClick={() => finish(r.id)}>
                   Končaj
                 </Button>
+                {r.mode === "classic" && (
+                  <Link
+                    href={`/oder/${r.code}/tocke`}
+                    className="inline-flex items-center rounded-md border border-violet-300 px-3 py-2 text-sm font-medium text-violet-700 hover:bg-violet-100 dark:border-violet-800 dark:text-violet-300 dark:hover:bg-violet-900/40"
+                  >
+                    Točke
+                  </Link>
+                )}
                 <Link
                   href={`/oder/${r.code}`}
                   className="inline-flex items-center gap-1 rounded-md bg-violet-600 px-3 py-2 text-sm font-medium text-white hover:bg-violet-700"
@@ -87,6 +116,43 @@ export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; roo
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {savedTeams.length > 0 && (
+        <section>
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              Izžrebane ekipe ({savedTeams.length})
+            </h2>
+            <div className="flex items-center gap-1">
+              <Link
+                href="/zrebanje"
+                className="rounded-md px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"
+              >
+                Žrebaj znova
+              </Link>
+              <Button variant="ghost" disabled={busy === "teams"} onClick={clearTeams}>
+                <IconTrash /> Izbriši
+              </Button>
+            </div>
+          </div>
+          <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {savedTeams.map((t) => (
+              <li
+                key={t.id}
+                className="rounded-xl border border-gray-200 bg-white px-4 py-3 dark:border-gray-800 dark:bg-gray-900"
+              >
+                <div className="font-semibold text-violet-600 dark:text-violet-400">{t.name}</div>
+                {t.members.length > 0 && (
+                  <div className="mt-0.5 text-sm text-gray-600 dark:text-gray-300">{t.members.join(", ")}</div>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+            V klasičnem kvizu jih dodaš v igro na strani „Točke“ (zavihek Ekipe).
+          </p>
         </section>
       )}
 
@@ -121,6 +187,8 @@ export default function AdminHome({ quizzes, rooms }: { quizzes: QuizItem[]; roo
                   <div className="truncate font-medium">{q.title}</div>
                   <div className="text-xs text-gray-500 dark:text-gray-400">
                     {q.questionCount} {q.questionCount === 1 ? "vprašanje" : q.questionCount === 2 ? "vprašanji" : q.questionCount < 5 ? "vprašanja" : "vprašanj"}
+                    {" · "}
+                    {q.mode === "classic" ? "klasični (listki)" : "telefonski"}
                   </div>
                 </div>
                 <Link
