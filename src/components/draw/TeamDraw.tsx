@@ -110,13 +110,15 @@ export default function TeamDraw() {
     setSaved(error ? "error" : "saved");
   };
 
-  const startDraw = () => {
+  // `quick` (za testiranje): isti žreb in shranjevanje, brez celozaslonske
+  // razglasitve — rezultat se takoj pokaže pod obrazcem.
+  const startDraw = (quick = false) => {
     const g = draw(men, women, size);
     const l = drawLabels(teamNames, g.length);
     setGroups(g);
     setLabels(l);
     setRound((r) => r + 1);
-    setShowing(true);
+    setShowing(!quick);
     void save(g, l);
   };
 
@@ -271,14 +273,25 @@ export default function TeamDraw() {
           </p>
         </div>
 
-        <Button onClick={startDraw} disabled={!canDraw} className="w-full py-3 text-base">
-          <IconShuffle className="h-5 w-5" />
-          {groups ? "Žrebaj znova" : "Žrebaj"}
-        </Button>
+        <div className="space-y-2">
+          <Button onClick={() => startDraw()} disabled={!canDraw} className="w-full py-3 text-base">
+            <IconShuffle className="h-5 w-5" />
+            {groups ? "Žrebaj znova" : "Žrebaj"}
+          </Button>
+          <Button variant="secondary" onClick={() => startDraw(true)} disabled={!canDraw} className="w-full">
+            Hitro žrebaj (test, brez razglasitve)
+          </Button>
+        </div>
       </div>
 
       {showing && groups && (
-        <DrawShow key={round} groups={groups} labels={labels} onClose={() => setShowing(false)} onRedraw={startDraw} />
+        <DrawShow
+          key={round}
+          groups={groups}
+          labels={labels}
+          onClose={() => setShowing(false)}
+          onRedraw={() => startDraw()}
+        />
       )}
 
       {groups && !showing && (

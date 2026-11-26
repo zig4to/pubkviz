@@ -138,6 +138,18 @@ export type KvizTeam = {
   room_id: string;
   name: string;
   members: string[]; // dopisana imena brez telefona (0003_team_members)
+  tiebreak: number | null; // 0016: mesto znotraj izenačene skupine (1 = zmagal izenačenje)
+  created_at: string;
+};
+
+/** 0016: dodatna vprašanja za izenačenje („kdor je bližji, zmaga“), ločeno od kategorij. */
+export type KvizTiebreaker = {
+  id: string;
+  quiz_id: string;
+  position: number;
+  prompt: string;
+  answer: string;
+  explanation: string | null;
   created_at: string;
 };
 
@@ -202,6 +214,7 @@ export type Database = {
       kviz_players: Table<KvizPlayer, never>;
       kviz_answers: Table<KvizAnswer, never>;
       kviz_saved_teams: Table<KvizSavedTeam, "name">;
+      kviz_tiebreakers: Table<KvizTiebreaker, "quiz_id" | "prompt" | "answer">;
     };
     Views: Record<string, never>;
     Functions: {
@@ -228,6 +241,9 @@ export type Database = {
       kviz_host_mark: Fn<{ p_team: string; p_question: string; p_correct: boolean | null; p_parts?: (boolean | null)[] | null }, undefined>;
       kviz_save_teams: Fn<{ p_teams: { name: string; members: string[] }[] }, undefined>;
       kviz_host_import_teams: Fn<{ p_room: string }, number>;
+      // 0016: izenačenje
+      kviz_host_tiebreak_win: Fn<{ p_team: string }, undefined>;
+      kviz_host_tiebreak_reset: Fn<{ p_room: string }, undefined>;
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

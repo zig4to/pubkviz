@@ -6,12 +6,21 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { createClient } from "@/lib/supabase/client";
 import { useRoomPing } from "@/lib/useRoomPing";
 import { LETTERS, OPTION_COLORS, errorText, imageUrl } from "@/lib/kviz";
-import type { CategoryExample, KvizAnswer, KvizPlayer, KvizQuestion, KvizRoom, KvizTeam, ScoreRow } from "@/lib/types/database.types";
+import type { CategoryExample, KvizAnswer, KvizPlayer, KvizQuestion, KvizRoom, KvizTeam, KvizTiebreaker, ScoreRow } from "@/lib/types/database.types";
 import { IconArrowLeft, IconCheck, IconChevronRight, IconUsers, IconX } from "@/components/ui/icons";
 import clsx from "@/lib/utils/clsx";
 
 type OutlineItem = { categoryId: string; category: string };
 type AnswerInfo = Pick<KvizQuestion, "id" | "category_id" | "type" | "prompt" | "options" | "correct_index" | "accepted_answers" | "explanation">;
+
+// Razvrstitev klasičnega kviza: točke padajoče, nato izenačenje (0016,
+// kviz_teams.tiebreak: 1 = zmagal izenačenje; null = neodločeno, zadnji).
+// Isto mesto si delijo samo ekipe z enakimi točkami in enakim tiebreak.
+type Rankable = { score: number; tiebreak?: number | null };
+const tbKey = (t?: number | null) => t ?? Number.MAX_SAFE_INTEGER;
+const byRank = (a: Rankable, b: Rankable) => b.score - a.score || tbKey(a.tiebreak) - tbKey(b.tiebreak);
+const placeIn = (sorted: Rankable[], x: Rankable) =>
+  sorted.findIndex((r) => r.score === x.score && tbKey(r.tiebreak) === tbKey(x.tiebreak)) + 1;
 
 // Besedilo vprašanja brez napisa „# …“ v prvi vrstici (za preglede).
 const plainPrompt = (p?: string | null) => (p ?? "").replace(/^# [^\n]*\n/, "");
@@ -22,6 +31,8 @@ type Data = {
   players: KvizPlayer[];
   answers: KvizAnswer[]; // samo za trenutno vprašanje
   scores: ScoreRow[];
+  // Klasični konec: točke vseh ocen (kviz_scoreboard zaokroži ½ točke na cela).
+  points: { team_id: string; question_id: string; points: number; is_correct: boolean | null; parts: (boolean | null)[] | null }[];
 };
 
 // Projektor: en gumb „Naprej“ (ali tipka →, presledek, Enter, PageDown —
@@ -36,11 +47,23 @@ export default function Stage({ roomId }: { roomId: string }) {
     const { data: room } = await supabase.from("kviz_rooms").select("*").eq("id", roomId).single();
     if (!room) return;
     const qid = room.current?.question_id ?? "00000000-0000-0000-0000-000000000000";
-    const [teams, players, answers, scores] = await Promise.all([
+    const classicEnd = room.mode === "classic" && room.state === "finished";
+    const [teams, players, answers, scores, points] = await Promise.all([
       supabase.from("kviz_teams").select("*").eq("room_id", roomId).order("created_at"),
       supabase.from("kviz_players").select("id, room_id, team_id, nickname, joined_at").eq("room_id", roomId).order("joined_at"),
       supabase.from("kviz_answers").select("*").eq("room_id", roomId).eq("question_id", qid),
       supabase.rpc("kviz_scoreboard", { p_room: roomId }),
+      classicEnd
+        ? supabase.from("kviz_answers").select("team_id, question_id, points, is_correct, parts").eq("room_id", roomId)
+        : Promise.resolve({
+            data: [] as {
+              team_id: string;
+              question_id: string;
+              points: number;
+              is_correct: boolean | null;
+              parts: (boolean | null)[] | null;
+            }[],
+          }),
     ]);
     setData({
       room,
@@ -48,6 +71,13 @@ export default function Stage({ roomId }: { roomId: string }) {
       players: players.data ?? [],
       answers: answers.data ?? [],
       scores: scores.data ?? [],
+      points: (points.data ?? []).map((p) => ({
+        team_id: p.team_id,
+        question_id: p.question_id,
+        points: Number(p.points),
+        is_correct: p.is_correct,
+        parts: p.parts,
+      })),
     });
   }, [supabase, roomId]);
 
@@ -64,6 +94,8 @@ export default function Stage({ roomId }: { roomId: string }) {
   const [answerInfo, setAnswerInfo] = useState<(AnswerInfo | null)[]>([]);
   // Kategorije s pregledom vseh vprašanj po zadnjem vprašanju (0012).
   const [summaryCats, setSummaryCats] = useState<Set<string>>(new Set());
+  // 0016: dodatna vprašanja za izenačenje (po vrsti).
+  const [tiebreakers, setTiebreakers] = useState<KvizTiebreaker[]>([]);
   const roomQuizId = data?.room.quiz_id;
   const questionKey = data?.room.question_ids.join(",");
   useEffect(() => {
@@ -76,8 +108,10 @@ export default function Stage({ roomId }: { roomId: string }) {
         .select("id, category_id, type, prompt, options, correct_index, accepted_answers, explanation")
         .in("id", ids),
       supabase.from("kviz_categories").select("id, name, example, summary").eq("quiz_id", roomQuizId),
-    ]).then(([qs, cats]) => {
+      supabase.from("kviz_tiebreakers").select("*").eq("quiz_id", roomQuizId).order("position").order("created_at"),
+    ]).then(([qs, cats, tbs]) => {
       if (!alive) return;
+      setTiebreakers(tbs.data ?? []);
       const catOf = new Map((qs.data ?? []).map((q) => [q.id, q.category_id]));
       setAnswerInfo(ids.map((id) => (qs.data ?? []).find((q) => q.id === id) ?? null));
       const nameOf = new Map((cats.data ?? []).map((c) => [c.id, c.name]));
@@ -112,6 +146,8 @@ export default function Stage({ roomId }: { roomId: string }) {
   // 1 = primer „Kako se igra?“, 2 = rešitev primera. Ob drugem vprašanju/stanju
   // se ključ spremeni in korak je spet 0.
   const [introStep, setIntroStep] = useState({ key: "", step: 0 });
+  // Končni rezultati: med samodejnim razkrivanjem / premorom je Naprej skrit.
+  const [revealHold, setRevealHold] = useState(false);
   const introKey = data ? `${data.room.state}:${data.room.q_index}` : "";
   const step = introStep.key === introKey ? introStep.step : 0;
   const example =
@@ -129,14 +165,86 @@ export default function Stage({ roomId }: { roomId: string }) {
     !!data.room.current?.last_in_category &&
     summaryCats.has(data.room.current?.category_id ?? "");
 
+  // Skok na skriti zaslon kategorije (pike pod časovnico): kviz_goto na
+  // vprašanje / uvod, za „Oddajte listke“ še kviz_next (→ scoreboard ali
+  // finished pri zadnji kategoriji), nato lokalni korak.
+  const jump = useCallback(
+    async (index: number, opts: { intro?: boolean; advance?: boolean; step: number }) => {
+      if (busy || !data) return;
+      setBusy(true);
+      setError(null);
+      setRevealHold(false);
+      let { error } = await supabase.rpc("kviz_goto", { p_room: roomId, p_index: index, p_intro: !!opts.intro });
+      if (!error && opts.advance) ({ error } = await supabase.rpc("kviz_next", { p_room: roomId }));
+      if (error) setError(errorText(error));
+      else {
+        const state = opts.intro
+          ? "intro"
+          : opts.advance
+            ? index + 1 >= data.room.question_ids.length
+              ? "finished"
+              : "scoreboard"
+            : "question";
+        setIntroStep({ key: `${state}:${index}`, step: opts.step });
+      }
+      await load();
+      setBusy(false);
+    },
+    [busy, data, supabase, roomId, load]
+  );
+
+  // Končna razvrstitev (točke iz točkovanja z ½, nato izenačenje).
+  const standings = useMemo(
+    () =>
+      (data?.teams ?? [])
+        .map((t) => ({
+          id: t.id,
+          name: t.name,
+          members: t.members ?? [],
+          tiebreak: t.tiebreak ?? null,
+          score: (data?.points ?? []).filter((p) => p.team_id === t.id).reduce((s, p) => s + p.points, 0),
+        }))
+        .sort(byRank),
+    [data]
+  );
+  // Neodločena izenačenja: skupine ≥ 2 ekip z enakimi točkami brez tiebreak.
+  const openTies = useMemo(
+    () =>
+      standings
+        .filter((r) => r.tiebreak === null)
+        .reduce<(typeof standings)[]>((acc, r) => {
+          const g = acc.find((x) => x[0].score === r.score);
+          if (g) g.push(r);
+          else acc.push([r]);
+          return acc;
+        }, [])
+        .filter((g) => g.length > 1),
+    [standings]
+  );
+  const tieQuestionIdx = standings.filter((r) => r.tiebreak !== null).length; // vsaka odločitev porabi eno vprašanje
+  const tieBlock = data?.room.state === "finished" && step === 3 && openTies.length > 0;
+
+  // Klasični konec po tabeli točk: diaprojekcija odgovorov po ekipah, po dve
+  // kategoriji na stran → n ekip × pages strani. Zadnji korak = endStep.
+  const teamCount = data?.teams.length ?? 0;
+  const reviewPages = Math.ceil(new Set((outline ?? []).map((o) => o.categoryId)).size / 2);
+  const endStep = 4 + teamCount + teamCount * reviewPages;
+
   const next = useCallback(async () => {
-    if (busy || !data) return;
+    if (busy || !data || revealHold || tieBlock) return;
     if (example && step < 2) {
       setIntroStep({ key: introKey, step: step + 1 });
       return;
     }
     if ((reviewable || summaryNow) && step < 1) {
       setIntroStep({ key: introKey, step: 1 });
+      return;
+    }
+    // Klasični konec: po pregledu zadnjih odgovorov še korak 2 = zahvala,
+    // korak 3 = končni rezultati (prazni), 3 + k = razkritih k ekip od zadnje,
+    // 4 + n = tabela točk po kategorijah, nato strani odgovorov po ekipah.
+    if (reviewable && data.room.state === "finished" && step >= 1 && step < endStep) {
+      setIntroStep({ key: introKey, step: step + 1 });
       return;
     }
     if (data.room.state === "finished") return;
@@ -146,7 +254,7 @@ export default function Stage({ roomId }: { roomId: string }) {
     if (error) setError(errorText(error));
     await load();
     setBusy(false);
-  }, [busy, data, supabase, roomId, load, example, step, introKey, reviewable, summaryNow]);
+  }, [busy, data, supabase, roomId, load, example, step, introKey, reviewable, summaryNow, endStep, revealHold, tieBlock]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -186,6 +294,26 @@ export default function Stage({ roomId }: { roomId: string }) {
           : "Naslednje vprašanje"
         : reviewable && step === 0
           ? "Pregled odgovorov"
+          : room.state === "finished" && step === 1
+            ? "Zaključek"
+          : room.state === "finished" && step === 2
+            ? "Končni rezultati"
+          : room.state === "finished" && step >= 3 && step < 3 + data.teams.length
+            ? step === 3 && data.teams.length > 3
+              ? "Začni prikazovati rezultate"
+              : step === 2 + data.teams.length
+              ? "Zmagovalec"
+              : step === 1 + data.teams.length
+                ? "2. mesto"
+                : step === data.teams.length
+                  ? "3. mesto"
+                  : "Razkrij naslednjo ekipo"
+          : room.state === "finished" && step === 3 + data.teams.length
+            ? "Tabela točk"
+          : room.state === "finished" && step === 4 + data.teams.length && endStep > step
+            ? "Odgovori po ekipah"
+          : room.state === "finished" && step > 4 + data.teams.length && step < endStep
+            ? "Naslednja stran"
           : room.state === "scoreboard"
             ? "Naslednja kategorija"
             : null
@@ -205,10 +333,89 @@ export default function Stage({ roomId }: { roomId: string }) {
             ? "Naslednja kategorija"
             : null;
 
+  // Konec klasičnega kviza (zahvala, rezultati, tabela, diaprojekcija): pike
+  // v časovnici pod zadnjo kategorijo, za „Pregled odgovorov“ (korak 2 naprej).
+  const endSlides: { label: string; group: string; step: number }[] = (() => {
+    if (!classic) return [];
+    const n = data.teams.length;
+    const out = [
+      { label: "Zahvala", group: "Zahvala" },
+      { label: "Končni rezultati", group: "Rezultati" },
+      ...standings.map((_, k) => ({ label: `${n - k}. mesto`, group: "Rezultati" })),
+      { label: "Tabela točk", group: "Tabela" },
+      ...(reviewPages > 0 && n > 0 ? [{ label: "Odgovori po ekipah", group: "Odgovori" }] : []),
+    ];
+    return out.map((o, i) => ({ ...o, step: i + 2 }));
+  })();
+
+  // Med diaprojekcijo odgovorov: pike za vse strani (po skupinah ekip) pod časovnico.
+  const slideStart = 5 + data.teams.length;
+  const slideGroups: { name: string; steps: { step: number; label: string }[] }[] =
+    classic && room.state === "finished" && step >= slideStart
+      ? (() => {
+          // Isti vrstni red kot TeamAnswersSlide (od zadnjega mesta).
+          const order = [...standings].reverse();
+          return order.map((t, ti) => ({
+            name: t.name,
+            steps: Array.from({ length: reviewPages }, (_, p) => ({
+              step: slideStart + ti * reviewPages + p,
+              label: `${t.name} · stran ${p + 1}/${reviewPages}`,
+            })),
+          }));
+        })()
+      : [];
+
   return (
     <div className="flex min-h-screen flex-col bg-gray-950 text-white [background-image:radial-gradient(ellipse_at_top_left,rgba(6,182,212,0.18),transparent_55%),radial-gradient(ellipse_at_bottom_right,rgba(124,58,237,0.25),transparent_55%)]">
       {outline && outline.length > 0 && (
-        <Timeline outline={outline} room={room} disabled={busy} onPick={(i, intro) => void goto(i, intro)} />
+        <Timeline
+          outline={outline}
+          room={room}
+          disabled={busy}
+          onPick={(i, intro) => void goto(i, intro)}
+          step={step}
+          exampleCats={new Set(examples.keys())}
+          summaryCats={summaryCats}
+          endSlides={endSlides}
+          onJump={(s) => void jump(s.index, { intro: s.intro, advance: s.advance, step: s.step })}
+        />
+      )}
+      {slideGroups.length > 0 && (
+        <nav
+          aria-label="Strani odgovorov po ekipah"
+          className="flex flex-wrap items-end justify-center gap-x-5 gap-y-1.5 border-b border-white/5 px-6 py-2"
+        >
+          {slideGroups.map((g) => (
+            <div key={g.steps[0]?.step} className="flex flex-col items-center gap-1">
+              <span className="max-w-[10rem] truncate text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                {g.name}
+              </span>
+              <div className="flex gap-1">
+                {g.steps.map((s) => (
+                  <button
+                    key={s.step}
+                    type="button"
+                    title={s.label}
+                    aria-label={s.label}
+                    aria-current={s.step === step ? "step" : undefined}
+                    onClick={(e) => {
+                      e.currentTarget.blur();
+                      setIntroStep({ key: introKey, step: s.step });
+                    }}
+                    className={clsx(
+                      "h-3 w-3 rounded-full transition-colors",
+                      s.step === step
+                        ? "bg-cyan-400 ring-2 ring-cyan-400/40 ring-offset-1 ring-offset-gray-950"
+                        : s.step < step
+                          ? "bg-violet-500/70 hover:bg-violet-400"
+                          : "bg-white/15 hover:bg-white/35",
+                    )}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </nav>
       )}
       <header className="flex items-center justify-between gap-4 px-6 py-3 text-sm text-white/60">
         <div className="flex min-w-0 items-center gap-3">
@@ -257,6 +464,53 @@ export default function Stage({ roomId }: { roomId: string }) {
         {reviewable && step === 1 && outline && (
           <AnswerReview key={introKey} room={room} outline={outline} answers={answerInfo} />
         )}
+        {classic && room.state === "finished" && step === 2 && <ThankYou />}
+        {classic && room.state === "finished" && step === 4 + data.teams.length && (
+          <PointsTable data={data} outline={outline ?? []} />
+        )}
+        {/* Radio od tabele točk do konca diaprojekcije — ena instanca, da glasba ne preneha ob menjavi strani. */}
+        {classic && room.state === "finished" && step >= 4 + data.teams.length && <RadioButton />}
+        {classic && room.state === "finished" && step > 4 + data.teams.length && outline && (
+          <TeamAnswersSlide
+            data={data}
+            outline={outline}
+            answers={answerInfo}
+            slide={step - 5 - data.teams.length}
+            last={step === endStep}
+            onNext={() => void next()}
+          />
+        )}
+        {/* Pred končnimi rezultati: najprej odloči vsa izenačenja (dodatna vprašanja). */}
+        {classic && room.state === "finished" && step === 3 && openTies.length > 0 && (
+          <TiebreakView
+            key={openTies[0].map((t) => t.id).join(",")}
+            group={openTies[0]}
+            question={tiebreakers[tieQuestionIdx] ?? null}
+            canReset={tieQuestionIdx > 0}
+            onWin={async (teamId) => {
+              const { error } = await supabase.rpc("kviz_host_tiebreak_win", { p_team: teamId });
+              if (error) setError(errorText(error));
+              await load();
+            }}
+            onReset={async () => {
+              const { error } = await supabase.rpc("kviz_host_tiebreak_reset", { p_room: room.id });
+              if (error) setError(errorText(error));
+              await load();
+            }}
+          />
+        )}
+        {classic && room.state === "finished" && step >= 3 && step < 4 + data.teams.length &&
+          !(step === 3 && openTies.length > 0) && (
+          <FinalReveal
+            title={room.title}
+            revealed={step - 3}
+            onHold={setRevealHold}
+            onNext={() =>
+              setIntroStep((s) => ({ key: introKey, step: (s.key === introKey ? s.step : 0) + 1 }))
+            }
+            rows={standings}
+          />
+        )}
         {!classic && room.state === "lobby" && <LobbyView data={data} onKick={async (id) => {
           await supabase.rpc("kviz_kick", { p_player: id });
           await load();
@@ -282,11 +536,11 @@ export default function Stage({ roomId }: { roomId: string }) {
       {error && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 rounded-lg bg-rose-600 px-4 py-2 text-sm">{error}</div>
       )}
-      {nextLabel && (
+      {nextLabel && !revealHold && !tieBlock && (
         <button
           onClick={() => void next()}
           disabled={busy}
-          className="fixed bottom-6 right-6 flex items-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-7 py-4 text-xl font-semibold shadow-xl shadow-violet-900/40 transition-transform hover:scale-[1.03] disabled:opacity-60"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-7 py-4 text-xl font-semibold shadow-xl shadow-violet-900/40 transition-transform hover:scale-[1.03] disabled:opacity-60"
         >
           {nextLabel} <IconChevronRight className="h-6 w-6" />
         </button>
@@ -298,17 +552,91 @@ export default function Stage({ roomId }: { roomId: string }) {
 // Vodoravna časovnica čez cel zaslon: en odsek na kategorijo (širina po
 // številu vprašanj), v njem oštevilčena vprašanja 1, 2, 3 … Klik skoči na
 // vprašanje (kviz_goto).
+// Skriti zasloni kategorije (pike pod krogci vprašanj): levo uvod (+ primer,
+// rešitev), desno po zadnjem vprašanju (pregled vprašanj; v klasičnem kvizu
+// „Oddajte listke“ in pregled odgovorov). Klik → onJump.
+type SubSlide = { label: string; index: number; intro?: boolean; advance?: boolean; step: number; active: boolean };
+
 function Timeline({
   outline,
   room,
   disabled,
   onPick,
+  step,
+  exampleCats,
+  summaryCats,
+  endSlides,
+  onJump,
 }: {
   outline: OutlineItem[];
   room: KvizRoom;
   disabled: boolean;
   onPick: (index: number, intro: boolean) => void;
+  step: number;
+  exampleCats: Set<string>;
+  summaryCats: Set<string>;
+  endSlides: { label: string; group: string; step: number }[];
+  onJump: (s: SubSlide) => void;
 }) {
+  const classic = room.mode === "classic";
+  const lastIdx = outline.length - 1;
+  // Konec kviza: pod zadnjo kategorijo, skupine (Zahvala, Rezultati, Tabela, ekipe).
+  const endGroups = endSlides.reduce<{ name: string; items: SubSlide[] }[]>((acc, e) => {
+    const s: SubSlide = {
+      label: e.label,
+      index: lastIdx,
+      advance: true,
+      step: e.step,
+      active: room.state === "finished" && room.q_index === lastIdx && step === e.step,
+    };
+    const g = acc[acc.length - 1];
+    if (g && g.name === e.group) g.items.push(s);
+    else acc.push({ name: e.group, items: [s] });
+    return acc;
+  }, []);
+  const subSlides = (start: number, count: number, categoryId: string) => {
+    const last = start + count - 1;
+    const before: SubSlide[] = [{ label: "Uvod", index: start, intro: true, step: 0, active: false }];
+    if (exampleCats.has(categoryId))
+      before.push(
+        { label: "Kako se igra?", index: start, intro: true, step: 1, active: false },
+        { label: "Rešitev primera", index: start, intro: true, step: 2, active: false },
+      );
+    const after: SubSlide[] = [];
+    if (summaryCats.has(categoryId)) after.push({ label: "Pregled vprašanj", index: last, step: 1, active: false });
+    if (classic)
+      after.push(
+        { label: "Oddajte listke", index: last, advance: true, step: 0, active: false },
+        { label: "Pregled odgovorov", index: last, advance: true, step: 1, active: false },
+      );
+    const atEnd = room.state === "scoreboard" || room.state === "finished";
+    const mark = (s: SubSlide) => ({
+      ...s,
+      active:
+        room.q_index === s.index &&
+        step === s.step &&
+        (s.intro ? room.state === "intro" : s.advance ? atEnd : room.state === "question"),
+    });
+    return { before: before.map(mark), after: after.map(mark) };
+  };
+  const dot = (s: SubSlide, si: number) => (
+    <button
+      key={`${s.label}-${s.step}`}
+      type="button"
+      disabled={disabled}
+      onClick={(e) => {
+        e.currentTarget.blur();
+        if (!s.active) onJump(s);
+      }}
+      title={`Kategorija ${si + 1} · ${s.label}`}
+      aria-label={`Kategorija ${si + 1}, ${s.label}`}
+      aria-current={s.active ? "step" : undefined}
+      className={clsx(
+        "h-2 w-2 rounded-full transition-colors disabled:cursor-wait",
+        s.active ? "bg-cyan-300 ring-2 ring-cyan-300/40" : "bg-white/20 hover:bg-white/60",
+      )}
+    />
+  );
   const segments: { categoryId: string; name: string; start: number; count: number }[] = [];
   outline.forEach((it, i) => {
     const last = segments[segments.length - 1];
@@ -385,6 +713,27 @@ function Timeline({
                   );
                 })}
               </div>
+              {(() => {
+                const { before, after } = subSlides(seg.start, seg.count, seg.categoryId);
+                const isLast = si === segments.length - 1;
+                return (
+                  <>
+                    <div className="flex items-center justify-between px-1">
+                      <div className="flex gap-1">{before.map((s) => dot(s, si))}</div>
+                      <div className="flex gap-1">{after.map((s) => dot(s, si))}</div>
+                    </div>
+                    {isLast && endGroups.length > 0 && (
+                      <div className="flex flex-wrap justify-end gap-x-2 gap-y-1 border-t border-white/10 px-1 pt-1">
+                        {endGroups.map((g) => (
+                          <div key={g.name + g.items[0].step} className="flex gap-1" title={g.name}>
+                            {g.items.map((s) => dot(s, si))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </li>
           );
         })}
@@ -1210,10 +1559,920 @@ function ClassicBreak({ room }: { room: KvizRoom }) {
   );
 }
 
+// Zadnji zaslon klasičnega kviza (po pregledu zadnjih odgovorov).
+// Izenačenje pred končnimi rezultati (0016): dodatno vprašanje „kdor je
+// bližji, zmaga“. Ekipe odgovor napišejo na listek, voditelj pokaže pravilni
+// odgovor in klikne ekipo, ki je bila bližje. Pri treh ali več izenačenih se
+// za preostale postavi naslednje vprašanje.
+function TiebreakView({
+  group,
+  question,
+  canReset,
+  onWin,
+  onReset,
+}: {
+  group: { id: string; name: string; members: string[]; score: number }[];
+  question: KvizTiebreaker | null;
+  canReset: boolean;
+  onWin: (teamId: string) => Promise<void>;
+  onReset: () => Promise<void>;
+}) {
+  const [shown, setShown] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const fmt = (x: number) => String(Math.round(x * 100) / 100).replace(".", ",");
+  const pick = async (id: string) => {
+    if (busy) return;
+    setBusy(true);
+    await onWin(id);
+    setBusy(false);
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center justify-center gap-[3vh] text-center">
+      <div className="kviz-pop text-[min(1.6vw,2.8vh)] font-bold uppercase tracking-[0.3em] text-amber-300">
+        Izenačenje · {fmt(group[0].score)} t.
+      </div>
+      <div className="flex flex-wrap justify-center gap-x-[2vw] gap-y-2 text-[min(2.4vw,4vh)] font-black">
+        {group.map((t, i) => (
+          <span key={t.id}>
+            {i > 0 && <span className="mr-[2vw] text-white/30">vs</span>}
+            {t.name}
+          </span>
+        ))}
+      </div>
+      <div className="text-[min(1.3vw,2.3vh)] uppercase tracking-widest text-white/50">
+        Dodatno vprašanje — kdor je bližji, zmaga
+      </div>
+      {question ? (
+        <h1 className="max-w-5xl text-balance text-[min(3.6vw,6.5vh)] font-black leading-tight">{question.prompt}</h1>
+      ) : (
+        <p className="text-[min(2vw,3.5vh)] text-white/60">
+          Ni več pripravljenih dodatnih vprašanj — dodaj jih v urejevalniku ali izberi zmagovalca.
+        </p>
+      )}
+      {question && (
+        <div className="min-h-[12vh]">
+          {shown ? (
+            <div className="kviz-pop">
+              <div className="text-[min(5vw,9vh)] font-black text-emerald-300">{question.answer}</div>
+              {question.explanation && (
+                <div className="mt-1 text-[min(1.4vw,2.4vh)] text-white/60">{question.explanation}</div>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                setShown(true);
+              }}
+              className="rounded-full border border-white/20 px-6 py-3 text-lg font-semibold text-white/80 hover:bg-white/10"
+            >
+              Pokaži odgovor
+            </button>
+          )}
+        </div>
+      )}
+      {(shown || !question) && (
+        <div className="flex flex-col items-center gap-3">
+          <div className="text-sm uppercase tracking-widest text-white/50">Katera ekipa je bila bližje?</div>
+          <div className="flex flex-wrap justify-center gap-3">
+            {group.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                disabled={busy}
+                onClick={() => void pick(t.id)}
+                className="rounded-2xl bg-violet-600 px-7 py-4 text-xl font-bold shadow-lg shadow-violet-900/40 hover:bg-violet-500 disabled:opacity-50"
+              >
+                {t.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {canReset && (
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm("Ponastavim vse odločitve izenačenj?")) void onReset();
+          }}
+          className="text-xs text-white/30 underline hover:text-white/60"
+        >
+          Ponastavi izenačenja
+        </button>
+      )}
+    </div>
+  );
+}
+
+function ThankYou() {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-[2vw] text-center">
+      <h1 className="bg-gradient-to-r from-cyan-300 to-violet-400 bg-clip-text text-[7vw] font-black leading-tight text-transparent max-lg:text-5xl">
+        To je bilo to!
+      </h1>
+      <p className="max-w-[60vw] text-[2.4vw] font-semibold leading-snug max-lg:max-w-xl max-lg:text-xl">
+        Hvala vsem ekipam za odlično vzdušje.
+      </p>
+      <p className="max-w-[60vw] text-[2vw] leading-snug text-white/70 max-lg:max-w-xl max-lg:text-lg">
+        Upamo, da ste se nasmejali in odnesli domov kakšno novo modrost. Zdaj pa lepo počasi, kozarec vode vmes ne
+        škodi.
+      </p>
+      <p className="mt-[1vw] text-[1.3vw] uppercase tracking-widest text-cyan-300/80 max-lg:text-sm">
+        Rezultati bodo razglašeni čez 10 minut …
+      </p>
+    </div>
+  );
+}
+
+// Klasični kviz: končni rezultati po korakih. revealed = 0 → samo naslov;
+// vsak korak razkrije eno ekipo od zadnjega mesta naprej: najprej velika
+// razglasitev na sredini, nato se vrstica pojavi v grafu (graf raste od spodaj
+// navzgor, mesta zgoraj ostanejo prazna, dokler niso razkrita). Točke iz
+// točkovanja z ½; enake točke = isto mesto.
+// Prazen zaslon čaka na gumb „Začni prikazovati rezultate“; nato se ekipe
+// pod 3. mestom razkrijejo same (2 s premora po vsaki animaciji),
+// prve tri pa z gumbom; gumb je viden takoj (tudi med animacijo)
+// (`onHold(true)` gumb skrije in zaklene Naprej).
+// Ognjemet čez cel zaslon (canvas, pointer-events none): rakete s sledjo
+// poletijo z dna in počijo v iskre, po `ms` ugasne. Zvok: pok (šum) ob eksploziji.
+function Fireworks({ delay, ms }: { delay: number; ms: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const cv = ref.current;
+    const ctx = cv?.getContext("2d");
+    if (!cv || !ctx) return;
+    type Rocket = { x: number; y: number; vx: number; vy: number; ty: number; hue: number };
+    type Spark = { x: number; y: number; vx: number; vy: number; life: number; max: number; hue: number; size: number };
+    const rockets: Rocket[] = [];
+    const sparks: Spark[] = [];
+    let raf = 0;
+    let start = 0;
+    let nextLaunch = 0;
+    let audio: AudioContext | null = null;
+    try {
+      audio = new AudioContext();
+    } catch {
+      audio = null;
+    }
+    const bang = (vol: number) => {
+      if (!audio) return;
+      const len = Math.floor(audio.sampleRate * 0.6);
+      const buf = audio.createBuffer(1, len, audio.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+      const src = audio.createBufferSource();
+      src.buffer = buf;
+      const lp = audio.createBiquadFilter();
+      lp.type = "lowpass";
+      lp.frequency.value = 900 + Math.random() * 900;
+      const g = audio.createGain();
+      g.gain.value = vol;
+      src.connect(lp).connect(g).connect(audio.destination);
+      src.start();
+    };
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      cv.width = window.innerWidth * dpr;
+      cv.height = window.innerHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    const launch = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const x = w * (0.1 + Math.random() * 0.8);
+      const ty = h * (0.12 + Math.random() * 0.35);
+      const hues = [45, 190, 270, 330, 140, 20];
+      rockets.push({
+        x,
+        y: h + 10,
+        vx: (Math.random() - 0.5) * 2,
+        vy: -Math.sqrt(2 * 0.12 * (h - ty)) - 1,
+        ty,
+        hue: hues[Math.floor(Math.random() * hues.length)],
+      });
+    };
+    const burst = (r: Rocket) => {
+      const count = 70 + Math.floor(Math.random() * 50);
+      const speed = 3 + Math.random() * 3;
+      const ring = Math.random() < 0.3;
+      for (let i = 0; i < count; i++) {
+        const a = (i / count) * Math.PI * 2 + Math.random() * 0.1;
+        const s = ring ? speed : speed * (0.3 + Math.random() * 0.7);
+        const max = 55 + Math.random() * 35;
+        sparks.push({
+          x: r.x,
+          y: r.y,
+          vx: Math.cos(a) * s,
+          vy: Math.sin(a) * s,
+          life: max,
+          max,
+          hue: r.hue + (Math.random() * 30 - 15),
+          size: 1.6 + Math.random() * 1.4,
+        });
+      }
+      bang(0.25 + Math.random() * 0.2);
+    };
+
+    const frame = (t: number) => {
+      if (!start) start = t;
+      const el = t - start;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalCompositeOperation = "lighter";
+      if (el < ms && el >= nextLaunch) {
+        launch();
+        if (Math.random() < 0.45) launch();
+        nextLaunch = el + 250 + Math.random() * 450;
+      }
+      for (let i = rockets.length - 1; i >= 0; i--) {
+        const r = rockets[i];
+        r.x += r.vx;
+        r.y += r.vy;
+        r.vy += 0.12;
+        ctx.fillStyle = `hsl(${r.hue} 100% 75%)`;
+        ctx.beginPath();
+        ctx.arc(r.x, r.y, 2.2, 0, Math.PI * 2);
+        ctx.fill();
+        if (r.vy >= -0.5 || r.y <= r.ty) {
+          burst(r);
+          rockets.splice(i, 1);
+        }
+      }
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const p = sparks[i];
+        p.vx *= 0.975;
+        p.vy = p.vy * 0.975 + 0.06;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life -= 1;
+        const k = p.life / p.max;
+        ctx.fillStyle = `hsla(${p.hue} 100% ${55 + 25 * k}% / ${k})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * (0.4 + 0.6 * k), 0, Math.PI * 2);
+        ctx.fill();
+        if (p.life <= 0) sparks.splice(i, 1);
+      }
+      if (el < ms || rockets.length || sparks.length) raf = requestAnimationFrame(frame);
+      else ctx.clearRect(0, 0, w, h);
+    };
+    const timer = window.setTimeout(() => {
+      raf = requestAnimationFrame(frame);
+    }, delay);
+    return () => {
+      window.clearTimeout(timer);
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
+      void audio?.close();
+    };
+  }, [delay, ms]);
+  return <canvas ref={ref} aria-hidden className="pointer-events-none fixed inset-0 z-40" />;
+}
+
+const REVEAL_PAUSE_MS = 2000;
+
+function FinalReveal({
+  title,
+  revealed,
+  rows,
+  onNext,
+  onHold,
+}: {
+  title: string;
+  revealed: number;
+  rows: { id: string; name: string; members: string[]; score: number; tiebreak?: number | null }[];
+  onNext: () => void;
+  onHold: (hold: boolean) => void;
+}) {
+  const n = rows.length;
+  const shown = Math.min(revealed, n);
+  const max = Math.max(1, ...rows.map((r) => r.score));
+  const rank = (i: number) => placeIn(rows, rows[i]);
+  const fmt = (x: number) => String(Math.round(x * 100) / 100).replace(".", ",");
+  const latest = shown > 0 ? n - shown : -1; // indeks nazadnje razkrite ekipe
+  const medal = (r: number) =>
+    r === 1 ? "text-amber-300" : r === 2 ? "text-slate-300" : r === 3 ? "text-orange-400" : "text-white/40";
+  // Časi razglasitve (s): mesto takoj, bobni od 0,5 do D, ob D činele + ime.
+  // Bobni trajajo 1,9 s za vsa mesta (tudi zmagovalca — takrat je že jasno, kdo je ostal).
+  const D = 2.4;
+  const OUT = D + 2.2; // razglasitev se umakne
+  const ROW = OUT + 0.3; // vrstica v grafu
+
+  const played = useRef(-1);
+  useEffect(() => {
+    if (latest < 0 || played.current === latest) return;
+    played.current = latest;
+    playDrumroll(0.5, D);
+  }, [latest, D]);
+
+  // Samodejno razkrivanje do 4. mesta, nato premor pred gumbom za prve tri.
+  const cb = useRef({ onNext, onHold });
+  useEffect(() => {
+    cb.current = { onNext, onHold };
+  });
+  useEffect(() => {
+    if (shown >= n) {
+      // Po zmagovalcu: Naprej (Tabela točk) šele po animaciji + premoru.
+      const end = (ROW + 1.5) * 1000; // gumb takoj po animaciji
+      const a = window.setTimeout(() => cb.current.onHold(true), 0);
+      const b = window.setTimeout(() => cb.current.onHold(false), end);
+      return () => {
+        window.clearTimeout(a);
+        window.clearTimeout(b);
+        cb.current.onHold(false);
+      };
+    }
+    // Prazen zaslon čaka na gumb „Začni prikazovati rezultate“.
+    if (shown === 0) return;
+    const nextIdx = n - shown - 1; // indeks ekipe, ki pride naslednja
+    const auto = nextIdx >= 3;
+    // Prve tri: gumb je viden takoj (brez čakanja na konec animacije).
+    if (!auto) return;
+    // Samodejno: vrstica + stolpec na mestu + premor; gumb (prve tri): takoj po animaciji.
+    const wait = (ROW + 1.5) * 1000 + (auto ? REVEAL_PAUSE_MS : 0);
+    const a = window.setTimeout(() => cb.current.onHold(true), 0);
+    const b = window.setTimeout(() => {
+      cb.current.onHold(false);
+      if (auto) cb.current.onNext();
+    }, wait);
+    return () => {
+      window.clearTimeout(a);
+      window.clearTimeout(b);
+      cb.current.onHold(false);
+    };
+  }, [shown, n, ROW]);
+
+  return (
+    <div className="relative mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-6">
+      {/* Zmagovalec: 10 s ognjemeta od trenutka, ko se pokaže ime. */}
+      {latest === 0 && <Fireworks key={rows[0]?.id} delay={D * 1000} ms={10000} />}
+      <style>{`
+        @keyframes kviz-pop {
+          0% { opacity: 0; transform: scale(.5); }
+          60% { opacity: 1; transform: scale(1.08); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+        @keyframes kviz-out { to { opacity: 0; transform: scale(.94) translateY(3vh); } }
+        @keyframes kviz-gone { to { opacity: 0; } }
+        @keyframes kviz-drum {
+          0%, 100% { transform: scale(1); opacity: .35; }
+          50% { transform: scale(1.5); opacity: 1; }
+        }
+        @keyframes kviz-shake {
+          0%, 100% { transform: translateX(0); }
+          25% { transform: translateX(-.15vw) rotate(-.6deg); }
+          75% { transform: translateX(.15vw) rotate(.6deg); }
+        }
+        @keyframes kviz-row-in {
+          from { opacity: 0; transform: translateY(1.5rem); }
+          to { opacity: 1; transform: none; }
+        }
+        @keyframes kviz-bar { from { width: 0; } }
+        @keyframes kviz-fade { from { opacity: 0; } to { opacity: 1; } }
+      `}</style>
+
+      <div className={clsx("text-center transition-all duration-700", shown === 0 && "translate-y-[18vh]")}>
+        <div className="text-[1.4vw] uppercase tracking-widest text-cyan-300 max-lg:text-sm">{title}</div>
+        <h1 className={clsx("whitespace-nowrap font-black transition-all duration-700", shown === 0 ? "text-[7vw] max-lg:text-5xl" : "text-[4vw] max-lg:text-4xl")}>
+          Končni rezultati
+        </h1>
+      </div>
+
+      {n === 0 && <p className="text-center text-white/50">Ni ekip.</p>}
+
+      <ol className="space-y-2.5">
+        {rows.map((r, i) => {
+          const visible = i >= n - shown;
+          const rk = rank(i);
+          // Nazadnje razkrita vrstica počaka, da se razglasitev na sredini umakne.
+          const delay = i === latest ? `${ROW}s` : "0s";
+          return (
+            <li key={r.id} className="flex items-center gap-4" style={{ visibility: visible ? "visible" : "hidden" }}>
+              {visible && (
+                <>
+                  <span
+                    className={clsx("w-14 text-right text-[2vw] font-black max-lg:text-2xl", medal(rk))}
+                    style={{ animation: `kviz-fade .4s ${delay} both` }}
+                  >
+                    {rk}.
+                  </span>
+                  <div
+                    className="relative flex-1 overflow-hidden rounded-xl bg-white/5"
+                    style={{ animation: `kviz-row-in .5s ${delay} both` }}
+                  >
+                    <div
+                      className={clsx(
+                        "absolute inset-y-0 left-0 rounded-xl bg-gradient-to-r",
+                        rk === 1
+                          ? "from-amber-400/80 to-violet-600/80"
+                          : rk === 2
+                            ? "from-slate-300/80 to-violet-600/80"
+                            : rk === 3
+                              ? "from-orange-500/80 to-violet-600/80"
+                              : "from-cyan-500/70 to-violet-600/70",
+                      )}
+                      style={{
+                        width: `${(r.score / max) * 100}%`,
+                        animation: `kviz-bar 1.2s cubic-bezier(.2,.8,.2,1) ${i === latest ? `${ROW + 0.3}s` : "0s"} both`,
+                      }}
+                    />
+                    <div className="relative flex items-center justify-between px-5 py-3 text-[1.9vw] font-semibold max-lg:text-xl">
+                      <span className="flex min-w-0 items-baseline gap-[1vw]">
+                        <span className="shrink-0">{r.name}</span>
+                        {r.members.length > 0 && (
+                          <span className="truncate text-[1.1vw] font-normal text-white/60 max-lg:text-sm">
+                            {r.members.join(" · ")}
+                          </span>
+                        )}
+                      </span>
+                      <span className="shrink-0 pl-3 font-mono">{fmt(r.score)}</span>
+                    </div>
+                  </div>
+                </>
+              )}
+              {!visible && <div className="flex-1 py-3 text-[1.9vw] max-lg:text-xl">&nbsp;</div>}
+            </li>
+          );
+        })}
+      </ol>
+
+      {latest >= 0 && (
+        <div
+          key={latest}
+          className="pointer-events-none fixed inset-0 z-30 flex flex-col items-center justify-center bg-gray-950/85 text-center backdrop-blur-sm"
+          style={{ animation: `kviz-fade .3s both, kviz-out .5s ease-in ${OUT}s forwards` }}
+        >
+          {/* 1) mesto, med bobni se trese */}
+          <div
+            className={clsx("text-[6vw] font-black max-lg:text-5xl", medal(rank(latest)))}
+            style={{ animation: `kviz-pop .5s both, kviz-shake .12s linear .5s ${Math.round((D - 0.5) / 0.12)}` }}
+          >
+            {rank(latest)}. mesto
+          </div>
+          {/* 2) bobni: utripajoče pike do D */}
+          <div className="relative h-[10vw] w-full max-lg:h-24">
+            <div
+              className="absolute inset-0 flex items-center justify-center gap-[1.5vw]"
+              style={{ animation: `kviz-fade .2s .5s both, kviz-gone .15s ${D}s forwards` }}
+            >
+              {[0, 1, 2].map((k) => (
+                <span
+                  key={k}
+                  className="h-[1.4vw] w-[1.4vw] rounded-full bg-cyan-300 max-lg:h-3 max-lg:w-3"
+                  style={{ animation: `kviz-drum .6s ease-in-out ${0.5 + k * 0.2}s infinite` }}
+                />
+              ))}
+            </div>
+            {/* 3) ob činelah ime ekipe */}
+            <div
+              className="absolute inset-0 flex items-center justify-center px-[4vw] text-[8vw] font-black leading-none max-lg:text-6xl"
+              style={{ animation: `kviz-pop .6s cubic-bezier(.2,1.4,.4,1) ${D}s both` }}
+            >
+              <span className="truncate">{rows[latest].name}</span>
+            </div>
+          </div>
+          {rows[latest].members.length > 0 && (
+            <div
+              className="mb-[1vw] px-[4vw] text-[2.6vw] font-semibold text-cyan-200 max-lg:text-xl"
+              style={{ animation: `kviz-fade .4s ${D + 0.3}s both` }}
+            >
+              {rows[latest].members.join(" · ")}
+            </div>
+          )}
+          <div
+            className="font-mono text-[3vw] text-white/70 max-lg:text-2xl"
+            style={{ animation: `kviz-fade .4s ${D + 0.5}s both` }}
+          >
+            {fmt(rows[latest].score)} {rows[latest].score === 1 ? "točka" : rows[latest].score === 2 ? "točki" : rows[latest].score === 3 || rows[latest].score === 4 ? "točke" : "točk"}
+          </div>
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// Klasični kviz, zadnji zaslon: točke vsake ekipe po kategorijah (K1, K2, …)
+// in skupaj, razvrščeno po skupnih točkah. Spodaj gumb za izhod.
+function PointsTable({ data, outline }: { data: Data; outline: OutlineItem[] }) {
+  const { room, teams, points } = data;
+  const fmt = (x: number) => String(Math.round(x * 100) / 100).replace(".", ",");
+  const cats: { id: string; name: string }[] = [];
+  outline.forEach((it) => {
+    if (!cats.some((c) => c.id === it.categoryId)) cats.push({ id: it.categoryId, name: it.category });
+  });
+  const catOf = new Map(room.question_ids.map((qid, i) => [qid, outline[i]?.categoryId]));
+  const rows = teams
+    .map((t) => {
+      const byCat = new Map<string, number>();
+      let total = 0;
+      points
+        .filter((p) => p.team_id === t.id)
+        .forEach((p) => {
+          const c = catOf.get(p.question_id);
+          if (c) byCat.set(c, (byCat.get(c) ?? 0) + p.points);
+          total += p.points;
+        });
+      return { id: t.id, name: t.name, byCat, total, score: total, tiebreak: t.tiebreak };
+    })
+    .sort(byRank);
+  const best = new Map(cats.map((c) => [c.id, Math.max(0, ...rows.map((r) => r.byCat.get(c.id) ?? 0))]));
+
+  return (
+    <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col justify-center gap-[1.5vw]">
+      <div className="text-center">
+        <div className="text-[1.4vw] uppercase tracking-widest text-cyan-300 max-lg:text-sm">{room.title}</div>
+        <h1 className="text-[3.5vw] font-black max-lg:text-3xl">Tabela točk</h1>
+      </div>
+      <table className="w-full text-[1.5vw] tabular-nums max-lg:text-base">
+        <thead>
+          <tr className="align-bottom text-[1.1vw] uppercase tracking-wide text-white/50 max-lg:text-xs">
+            <th className="py-2 pr-3 text-right">#</th>
+            <th className="py-2 pr-3 text-left">Ekipa</th>
+            {cats.map((c, i) => (
+              <th key={c.id} className="px-1 py-2 text-center align-bottom" title={c.name}>
+                K{i + 1}
+                <div className="mx-auto max-w-[8vw] text-balance text-[0.7vw] font-normal normal-case leading-tight tracking-normal text-white/40 max-lg:text-[9px]">
+                  {c.name.toLowerCase()}
+                </div>
+              </th>
+            ))}
+            <th className="py-2 pl-3 text-right text-cyan-300">Skupaj</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => {
+            const rk = placeIn(rows, r);
+            return (
+              <tr key={r.id} className="border-t border-white/10">
+                <td
+                  className={clsx(
+                    "py-[0.6vw] pr-3 text-right font-black",
+                    rk === 1 ? "text-amber-300" : rk === 2 ? "text-slate-300" : rk === 3 ? "text-orange-400" : "text-white/40",
+                  )}
+                >
+                  {rk}.
+                </td>
+                <td className="max-w-[20vw] truncate py-[0.6vw] pr-3 font-semibold">{r.name}</td>
+                {cats.map((c) => {
+                  const v = r.byCat.get(c.id) ?? 0;
+                  return (
+                    <td
+                      key={c.id}
+                      className={clsx(
+                        "px-1 py-[0.6vw] text-center",
+                        v > 0 && v === best.get(c.id) ? "font-bold text-emerald-300" : "text-white/70",
+                      )}
+                    >
+                      {fmt(v)}
+                    </td>
+                  );
+                })}
+                <td className="py-[0.6vw] pl-3 text-right text-[1.8vw] font-black max-lg:text-lg">{fmt(r.total)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="text-center text-[1vw] text-white/40 max-lg:text-xs">
+        zeleno = največ točk v kategoriji
+      </p>
+      <div className="flex justify-center">
+        <Link
+          href="/"
+          className="rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-7 py-4 text-xl font-semibold shadow-xl shadow-violet-900/40 transition-transform hover:scale-[1.03]"
+        >
+          Zaključi kviz
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// Klasični kviz po tabeli točk: diaprojekcija za vsako ekipo (od zadnjega
+// mesta do zmagovalca), na stran po dve kategoriji (levo, desno): vprašanja
+// s pravilnim odgovorom in oceno ekipe (✓ / ✗ / delne točke). Vsaka stran
+// ostane 30 s, nato sama gre naprej (Naprej preskoči). Zapisanih odgovorov
+// z listkov nimamo — samo oceno iz točkovanja.
+const SLIDE_MS = 30000;
+
+function TeamAnswersSlide({
+  data,
+  outline,
+  answers,
+  slide,
+  last,
+  onNext,
+}: {
+  data: Data;
+  outline: OutlineItem[];
+  answers: (AnswerInfo | null)[];
+  slide: number;
+  last: boolean;
+  onNext: () => void;
+}) {
+  const { room, teams, points } = data;
+  const fmt = (x: number) => String(Math.round(x * 100) / 100).replace(".", ",");
+
+  // Samodejno naprej po 30 s (ref, da se časovnik ne resetira ob osvežitvi podatkov).
+  const nextRef = useRef(onNext);
+  useEffect(() => {
+    nextRef.current = onNext;
+  });
+  useEffect(() => {
+    if (last) return;
+    const t = window.setTimeout(() => nextRef.current(), SLIDE_MS);
+    return () => window.clearTimeout(t);
+  }, [slide, last]);
+
+  const cats: { id: string; name: string; idx: number[] }[] = [];
+  outline.forEach((it, i) => {
+    const c = cats.find((x) => x.id === it.categoryId);
+    if (c) c.idx.push(i);
+    else cats.push({ id: it.categoryId, name: it.category, idx: [i] });
+  });
+  const pages = Math.ceil(cats.length / 2);
+  const mark = new Map(points.map((p) => [`${p.team_id}:${p.question_id}`, p]));
+  const total = (tid: string, qids: string[] = room.question_ids) =>
+    qids.reduce((s, q) => s + (mark.get(`${tid}:${q}`)?.points ?? 0), 0);
+
+  const ranked = teams.map((t) => ({ ...t, score: total(t.id) })).sort(byRank);
+  const order = [...ranked].reverse(); // od zadnjega mesta naprej
+  const team = order[Math.floor(slide / pages)];
+  const page = slide % pages;
+  if (!team) return null;
+  const rank = placeIn(ranked, team);
+  const shown = cats.slice(page * 2, page * 2 + 2);
+
+  const answerText = (q: AnswerInfo | null) => {
+    if (!q) return "";
+    if (q.type === "choice") return q.correct_index !== null ? q.options[q.correct_index] ?? "" : "";
+    return q.accepted_answers[0] ?? "";
+  };
+
+  return (
+    <div key={slide} className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-[min(1.4vw,2.2vh)]">
+      <style>{`@keyframes kviz-progress { from { width: 0; } to { width: 100%; } }`}</style>
+      <div className="flex items-end justify-between gap-6">
+        <div className="min-w-0">
+          <div className="text-[min(1.1vw,1.9vh)] font-bold uppercase tracking-[0.3em] text-cyan-300 max-lg:text-xs">
+            {rank}. mesto · stran {page + 1}/{pages}
+          </div>
+          <div className="flex min-w-0 items-baseline gap-[min(1.5vw,2.5vh)]">
+            <h1 className="draw-land shrink-0 text-[min(3.4vw,5.8vh)] font-black leading-tight max-lg:text-3xl">
+              {team.name}
+            </h1>
+            {(team.members?.length ?? 0) > 0 && (
+              <span className="truncate text-[min(1.6vw,2.7vh)] font-semibold text-cyan-200/80 max-lg:text-lg">
+                <span className="text-white/40">– </span>
+                {team.members.join(" · ")}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="shrink-0 text-right font-mono text-[min(2.2vw,3.8vh)] font-bold max-lg:text-xl">
+          {fmt(total(team.id))} <span className="text-white/50">t.</span>
+        </div>
+      </div>
+      {!last && (
+        <div className="h-1 overflow-hidden rounded-full bg-white/10">
+          <div
+            key={slide}
+            className="h-full bg-gradient-to-r from-cyan-400 to-violet-500"
+            style={{ animation: `kviz-progress ${SLIDE_MS}ms linear both` }}
+          />
+        </div>
+      )}
+
+      <div className="grid flex-1 grid-cols-2 gap-[min(2vw,3.4vh)]">
+        {shown.map((c) => {
+          const n = cats.indexOf(c) + 1;
+          const qids = c.idx.map((i) => room.question_ids[i]);
+          const dense = c.idx.length > 6;
+          return (
+            <section key={c.id} className="draw-pop flex min-w-0 flex-col gap-[min(0.6vw,1vh)]">
+              <div className="flex items-baseline justify-between gap-3 border-b border-white/15 pb-[min(0.5vw,0.8vh)]">
+                <h2 className="truncate text-[min(1.7vw,2.9vh)] font-bold max-lg:text-lg">
+                  <span className="text-cyan-300">Kategorija {n}:</span> {c.name}
+                </h2>
+                <span className="shrink-0 font-mono text-[min(1.5vw,2.6vh)] font-bold text-white/80 max-lg:text-base">
+                  {fmt(total(team.id, qids))} t.
+                </span>
+              </div>
+              <ol className="flex flex-col gap-[min(0.45vw,0.75vh)]">
+                {c.idx.map((i, k) => {
+                  const q = answers[i];
+                  const m = mark.get(`${team.id}:${room.question_ids[i]}`);
+                  const partial = !!m?.parts && m.points > 0 && m.is_correct !== true;
+                  const ok = m?.is_correct === true;
+                  const bad = m?.is_correct === false && !partial;
+                  return (
+                    <li
+                      key={i}
+                      className={clsx(
+                        "flex items-center gap-[min(0.8vw,1.3vh)] rounded-[min(0.7vw,1.2vh)] px-[min(0.9vw,1.5vh)] ring-1",
+                        dense ? "py-[min(0.25vw,0.45vh)]" : "py-[min(0.5vw,0.85vh)]",
+                        ok
+                          ? "bg-emerald-500/15 ring-emerald-400/40"
+                          : partial
+                            ? "bg-amber-400/15 ring-amber-300/40"
+                            : bad
+                              ? "bg-rose-500/12 ring-rose-400/30"
+                              : "bg-white/[0.05] ring-white/10",
+                      )}
+                    >
+                      <span className="w-[1.6em] shrink-0 text-center text-[min(1vw,1.7vh)] font-bold text-white/50 max-lg:text-sm">
+                        {k + 1}
+                      </span>
+                      {/* Dolge kategorije (npr. 10 vprašanj): vprašanje in odgovor v eni vrstici. */}
+                      <div className={clsx("min-w-0 flex-1", dense && "flex items-baseline gap-[min(0.8vw,1.3vh)]")}>
+                        <p
+                          className={clsx(
+                            "truncate text-white/70 max-lg:text-sm",
+                            dense ? "min-w-0 flex-1 text-[min(0.95vw,1.6vh)]" : "text-[min(1.1vw,1.9vh)]",
+                          )}
+                        >
+                          {plainPrompt(q?.prompt).split("\n")[0]}
+                        </p>
+                        <p
+                          className={clsx(
+                            "truncate font-semibold max-lg:text-base",
+                            dense ? "max-w-[45%] shrink-0 text-[min(1.2vw,2vh)]" : "text-[min(1.3vw,2.2vh)]",
+                          )}
+                        >
+                          {answerText(q)}
+                        </p>
+                      </div>
+                      <span
+                        className={clsx(
+                          "flex shrink-0 items-center justify-center rounded-full font-black",
+                          dense ? "h-[min(1.9vw,3.2vh)] w-[min(1.9vw,3.2vh)]" : "h-[min(2.4vw,4vh)] w-[min(2.4vw,4vh)]",
+                          ok ? "bg-emerald-500 text-white" : partial ? "w-auto bg-amber-400 px-2 text-amber-950" : bad ? "bg-rose-500 text-white" : "bg-white/10 text-white/40",
+                        )}
+                      >
+                        {ok ? (
+                          <IconCheck className="h-[60%] w-[60%]" />
+                        ) : partial ? (
+                          <span className="text-[min(1vw,1.7vh)]">{fmt(m!.points)}</span>
+                        ) : bad ? (
+                          <IconX className="h-[60%] w-[60%]" />
+                        ) : (
+                          "–"
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
+          );
+        })}
+      </div>
+
+      {last && (
+        <div className="flex justify-center pb-2">
+          <Link
+            href="/"
+            className="rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-7 py-4 text-xl font-semibold shadow-xl shadow-violet-900/40 transition-transform hover:scale-[1.03]"
+          >
+            Zaključi kviz
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Spletni radio (house) za konec večera: plavajoč gumb spodaj levo.
+// Ibiza Global Radio, rezerva laut.fm deephouse (SomaFM v Chromu ne predvaja).
+const RADIO = [
+  { url: "https://listenssl.ibizaglobalradio.com:8024/ibizaglobalradio.mp3", name: "Ibiza Global Radio" },
+  { url: "https://stream.laut.fm/deephouse", name: "laut.fm Deep House" },
+];
+
+function RadioButton() {
+  const ref = useRef<HTMLAudioElement>(null);
+  const [state, setState] = useState<"off" | "loading" | "on" | "error">("off");
+  const [src, setSrc] = useState(0);
+  const start = async (i: number) => {
+    const a = ref.current;
+    if (!a) return;
+    if (i >= RADIO.length) return setState("error");
+    setSrc(i);
+    a.src = RADIO[i].url;
+    setState("loading");
+    try {
+      await a.play();
+      setState("on");
+    } catch {
+      void start(i + 1); // naslednja postaja
+    }
+  };
+  const toggle = () => {
+    const a = ref.current;
+    if (!a) return;
+    if (state === "on" || state === "loading") {
+      a.pause();
+      a.removeAttribute("src"); // prekini tok, ob ponovnem predvajanju v živo
+      a.load();
+      setState("off");
+      return;
+    }
+    void start(0);
+  };
+  return (
+    <div className="fixed bottom-6 left-6 z-20 flex items-center gap-3">
+      <audio ref={ref} preload="none" />
+      <button
+        onClick={() => void toggle()}
+        aria-label={state === "on" ? "Ustavi radio" : "Predvajaj radio"}
+        className={clsx(
+          "flex h-14 w-14 items-center justify-center rounded-full shadow-xl transition-transform hover:scale-105",
+          state === "on" ? "bg-violet-600" : "bg-white/10 ring-1 ring-white/20 hover:bg-white/20",
+        )}
+      >
+        {state === "on" || state === "loading" ? (
+          <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor" aria-hidden>
+            <rect x="6" y="5" width="4" height="14" rx="1" />
+            <rect x="14" y="5" width="4" height="14" rx="1" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="ml-0.5 h-6 w-6" fill="currentColor" aria-hidden>
+            <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" />
+          </svg>
+        )}
+      </button>
+      <div className="text-sm leading-tight">
+        <div className="font-semibold">House radio</div>
+        <div className="text-white/50">
+          {state === "on" ? `v živo · ${RADIO[src].name}` : state === "loading" ? "nalagam …" : state === "error" ? "ni povezave" : "Ibiza Global Radio"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Bobni (Web Audio, brez datoteke): udarci snare od `start` s, vse gostejši
+// in glasnejši, ob `end` činela + bas. Klik Naprej je uporabnikova gesta,
+// zato brskalnik zvok dovoli.
+function playDrumroll(start: number, end: number) {
+  try {
+    const ctx = new AudioContext();
+    const now = ctx.currentTime;
+    const noise = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+    const ch = noise.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+
+    const hit = (t: number, gain: number, decay: number, type: BiquadFilterType, freq: number) => {
+      const src = ctx.createBufferSource();
+      src.buffer = noise;
+      const f = ctx.createBiquadFilter();
+      f.type = type;
+      f.frequency.value = freq;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(gain, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + decay);
+      src.connect(f).connect(g).connect(ctx.destination);
+      src.start(t);
+      src.stop(t + decay + 0.05);
+    };
+
+    // Bobnanje se stopnjuje: počasi začne (razmik 280 ms) in eksponentno
+    // pospešuje do pravega vrtinca (40 ms) tik pred činelo; glasnost 0,1 → 0,55.
+    let t = start;
+    while (t < end) {
+      const p = (t - start) / (end - start);
+      hit(now + t, 0.1 + 0.45 * p * p, 0.1 - 0.04 * p, "bandpass", 1600 + 600 * p);
+      t += 0.28 * Math.pow(0.04 / 0.28, p);
+    }
+    // Činela + bas ob razkritju imena.
+    hit(now + end, 0.6, 1.8, "highpass", 5000);
+    const osc = ctx.createOscillator();
+    const og = ctx.createGain();
+    osc.frequency.setValueAtTime(90, now + end);
+    osc.frequency.exponentialRampToValueAtTime(40, now + end + 0.4);
+    og.gain.setValueAtTime(0.7, now + end);
+    og.gain.exponentialRampToValueAtTime(0.001, now + end + 0.5);
+    osc.connect(og).connect(ctx.destination);
+    osc.start(now + end);
+    osc.stop(now + end + 0.6);
+    window.setTimeout(() => void ctx.close(), (end + 2.5) * 1000);
+  } catch {}
+}
+
+// Lestvica telefonskega kviza; ekipe z enakimi točkami si delijo mesto.
 function ScoreStage({ data }: { data: Data }) {
   const { room, scores } = data;
   const finished = room.state === "finished";
   const max = Math.max(1, ...scores.map((s) => s.score));
+  const fmt = (n: number) => String(Math.round(n * 100) / 100).replace(".", ",");
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col justify-center gap-6">
@@ -1224,7 +2483,9 @@ function ScoreStage({ data }: { data: Data }) {
         <h1 className="text-[4vw] font-black max-lg:text-4xl">{finished ? "Končni rezultati" : "Lestvica"}</h1>
       </div>
       <ol className="space-y-2.5">
-        {scores.map((s, i) => (
+        {scores.map((s) => {
+          const i = scores.findIndex((x) => x.score === s.score);
+          return (
           <li key={s.team_id} className="flex items-center gap-4">
             <span
               className={clsx(
@@ -1241,11 +2502,12 @@ function ScoreStage({ data }: { data: Data }) {
               />
               <div className="relative flex items-center justify-between px-5 py-3 text-[1.9vw] font-semibold max-lg:text-xl">
                 <span className="truncate">{s.name}</span>
-                <span className="font-mono">{s.score}</span>
+                <span className="font-mono">{fmt(s.score)}</span>
               </div>
             </div>
           </li>
-        ))}
+          );
+        })}
       </ol>
       {scores.length === 0 && <p className="text-center text-white/50">Ni ekip.</p>}
     </div>

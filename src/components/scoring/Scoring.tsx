@@ -82,6 +82,7 @@ export default function Scoring({ roomId }: { roomId: string }) {
   const [catId, setCatId] = useState<string | null>(null);
   // Izžrebane ekipe voditelja (0015, kviz_saved_teams) — uvoz v to igro.
   const [savedNames, setSavedNames] = useState<string[]>([]);
+  const [randomizing, setRandomizing] = useState(false);
 
   const load = useCallback(async () => {
     const [r, t, a, s] = await Promise.all([
@@ -185,6 +186,33 @@ export default function Scoring({ roomId }: { roomId: string }) {
     });
   };
 
+  // Za testiranje: vsem ekipam naključno oceni vsa vprašanja (pri miksih
+  // vsak del posebej). Prepiše obstoječe ocene.
+  const randomizeAll = async () => {
+    if (!teams.length || !items.length) return;
+    if (!window.confirm(`Naključno označim vseh ${items.length} vprašanj za ${teams.length} ekip? Obstoječe ocene bodo prepisane.`))
+      return;
+    setRandomizing(true);
+    setError(null);
+    const jobs = teams.flatMap((t) =>
+      items.map((q) => {
+        const parts = q.parts.length ? q.parts.map(() => Math.random() < 0.6) : null;
+        return { p_team: t.id, p_question: q.id, p_correct: parts ? null : Math.random() < 0.6, p_parts: parts };
+      }),
+    );
+    // Po 10 hkrati, da ne zasujemo strežnika.
+    for (let i = 0; i < jobs.length; i += 10) {
+      const res = await Promise.all(jobs.slice(i, i + 10).map((j) => supabase.rpc("kviz_host_mark", j)));
+      const bad = res.find((r) => r.error);
+      if (bad?.error) {
+        setError(errorText(bad.error));
+        break;
+      }
+    }
+    await load();
+    setRandomizing(false);
+  };
+
   if (!room || !questions) return <div className="min-h-screen" />;
 
   if (room.mode !== "classic") {
@@ -200,7 +228,7 @@ export default function Scoring({ roomId }: { roomId: string }) {
   const stageIdx = Math.min(Math.max(room.q_index, 0), items.length - 1);
   const idx = follow ? stageIdx : Math.min(manualIdx, items.length - 1);
   const current = items[idx];
-  const activeView: View = view ?? (teams.length === 0 ? "teams" : "question");
+  const activeView: View = view ?? (teams.length === 0 ? "teams" : "team");
   const team = teams.find((t) => t.id === teamId) ?? teams[0] ?? null;
   const cat =
     categories.find((c) => c.id === catId) ?? categories.find((c) => c.id === current?.category_id) ?? categories[0];
@@ -220,14 +248,39 @@ export default function Scoring({ roomId }: { roomId: string }) {
     setManualIdx(Math.max(0, Math.min(items.length - 1, i)));
   };
 
-  // Naprej / nazaj: po vprašanju → vprašanje, po ekipi → kategorija.
+  // Listek = ena ekipa v eni kategoriji; pregledan, ko so ocenjena vsa vprašanja.
+  const sheetDone = (tid: string, c: { items: Item[] }) => c.items.every((q) => graded(tid, q) === 2);
   const catIdx = cat ? categories.findIndex((c) => c.id === cat.id) : -1;
+  const teamIdx = team ? teams.findIndex((t) => t.id === team.id) : -1;
+  // Naslednji listek: naslednja nepregledana ekipa v tej kategoriji (listki
+  // pridejo v poljubnem vrstnem redu), ko so vsi pregledani → naslednja kategorija.
+  const nextSheet = (() => {
+    if (!cat || !team) return null;
+    for (let i = 1; i < teams.length; i++) {
+      const t = teams[(teamIdx + i) % teams.length];
+      if (!sheetDone(t.id, cat)) return { cat, team: t };
+    }
+    const c = categories[catIdx + 1];
+    if (!c) return null;
+    return { cat: c, team: teams.find((t) => !sheetDone(t.id, c)) ?? teams[0] };
+  })();
+  const openSheet = (c: { id: string; items: Item[] }, tid?: string) => {
+    setCatId(c.id);
+    setTeamId(tid ?? (teams.find((t) => !sheetDone(t.id, c)) ?? teams[0])?.id ?? null);
+    window.scrollTo({ top: 0 });
+  };
+
+  // Naprej / nazaj: po vprašanju → vprašanje, po listkih → naslednji listek / prejšnja ekipa.
   const stepping = activeView === "question" || activeView === "team";
-  const canPrev = activeView === "question" ? idx > 0 : catIdx > 0;
-  const canNext = activeView === "question" ? idx < items.length - 1 : catIdx < categories.length - 1;
+  const canPrev = activeView === "question" ? idx > 0 : teamIdx > 0 || catIdx > 0;
+  const canNext = activeView === "question" ? idx < items.length - 1 : nextSheet !== null;
   const step = (d: -1 | 1) => {
     if (activeView === "question") goTo(idx + d);
-    else if (activeView === "team" && categories[catIdx + d]) setCatId(categories[catIdx + d].id);
+    else if (activeView === "team") {
+      if (d === 1 && nextSheet) openSheet(nextSheet.cat, nextSheet.team.id);
+      else if (d === -1 && teamIdx > 0) openSheet(cat, teams[teamIdx - 1].id);
+      else if (d === -1 && categories[catIdx - 1]) openSheet(categories[catIdx - 1], teams[teams.length - 1].id);
+    }
   };
   const withTimeline = stepping && teams.length > 0;
 
@@ -246,8 +299,8 @@ export default function Scoring({ roomId }: { roomId: string }) {
       <nav className="flex gap-1 rounded-xl bg-gray-100 p-1 text-sm dark:bg-gray-900">
         {(
           [
+            ["team", "Po listkih"],
             ["question", "Po vprašanju"],
-            ["team", "Po ekipi"],
             ["total", "Seštevek"],
             ["teams", `Ekipe (${teams.length})`],
           ] as const
@@ -265,6 +318,11 @@ export default function Scoring({ roomId }: { roomId: string }) {
           </button>
         ))}
       </nav>
+      {teams.length > 0 && (
+        <Button variant="ghost" onClick={() => void randomizeAll()} disabled={randomizing} title="Za testiranje">
+          {randomizing ? "Označujem …" : "Označi vse naključno (test)"}
+        </Button>
+      )}
     </div>
   );
 
@@ -283,13 +341,15 @@ export default function Scoring({ roomId }: { roomId: string }) {
             stageIdx={stageIdx}
             isSelected={(q) => (activeView === "question" ? q.index === idx : q.category_id === cat?.id)}
             status={(q) => {
-              if (activeView === "team") return team ? graded(team.id, q) : 0;
+              // Pri listkih: stanje celotne kategorije (vse ekipe), ekipe same imajo ✓.
               const g = teams.map((t) => graded(t.id, q));
               return g.every((x) => x === 2) ? 2 : g.some((x) => x > 0) ? 1 : 0;
             }}
             onPick={(q) => {
-              if (activeView === "team") setCatId(q.category_id);
-              else goTo(q.index);
+              if (activeView === "team") {
+                const c = categories.find((x) => x.id === q.category_id);
+                if (c && c.id !== cat?.id) openSheet(c);
+              } else goTo(q.index);
             }}
           />
         )}
@@ -398,38 +458,53 @@ export default function Scoring({ roomId }: { roomId: string }) {
 
           {activeView === "team" && team && cat && (
             <section>
-              <div className="mb-3 flex flex-wrap gap-1.5">
-                {teams.map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => setTeamId(t.id)}
-                    className={clsx(
-                      "rounded-full border px-3 py-1 text-sm",
-                      t.id === team.id
-                        ? "border-violet-600 bg-violet-600 text-white"
-                        : "border-gray-300 dark:border-gray-700",
-                    )}
-                  >
-                    {t.name}
-                  </button>
-                ))}
-              </div>
               <select
                 value={cat.id}
-                onChange={(e) => setCatId(e.target.value)}
-                className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900"
+                onChange={(e) => {
+                  const c = categories.find((x) => x.id === e.target.value);
+                  if (c) openSheet(c);
+                }}
+                className="mb-3 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold dark:border-gray-700 dark:bg-gray-900"
               >
                 {categories.map((c, i) => (
                   <option key={c.id} value={c.id}>
-                    {i + 1}. {c.name}
+                    {i + 1}. {c.name} ({teams.filter((t) => sheetDone(t.id, c)).length}/{teams.length} listkov)
                   </option>
                 ))}
               </select>
-              <div className="mb-2 flex justify-between text-sm text-gray-500 dark:text-gray-400">
-                <span>
-                  {team.name} · {cat.name}
-                </span>
-                <span>
+              <div className="mb-1 text-xs text-gray-500 dark:text-gray-400">
+                Izberi ekipo z listka ({teams.filter((t) => sheetDone(t.id, cat)).length}/{teams.length} pregledanih):
+              </div>
+              <div className="mb-4 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-4">
+                {teams.map((t) => {
+                  const done = sheetDone(t.id, cat);
+                  const sel = t.id === team.id;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => {
+                        setTeamId(t.id);
+                        window.scrollTo({ top: 0 });
+                      }}
+                      aria-pressed={sel}
+                      className={clsx(
+                        "flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-2 text-left text-sm font-medium",
+                        sel
+                          ? "border-violet-600 bg-violet-600 text-white"
+                          : done
+                            ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                            : "border-gray-300 dark:border-gray-700",
+                      )}
+                    >
+                      {done && <IconCheck className="h-4 w-4 shrink-0" />}
+                      <span className="min-w-0 truncate">{t.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mb-2 flex items-baseline justify-between gap-3">
+                <h2 className="min-w-0 truncate text-lg font-bold">{team.name}</h2>
+                <span className="shrink-0 text-sm text-gray-500 dark:text-gray-400">
                   {fmt(teamScore(team.id, cat.items))} t. · skupaj{" "}
                   <b className="text-gray-900 dark:text-gray-100">{fmt(teamScore(team.id))}</b>
                 </span>
@@ -446,6 +521,32 @@ export default function Scoring({ roomId }: { roomId: string }) {
                   />
                 ))}
               </ul>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {!sheetDone(team.id, cat) && (
+                  <Button
+                    variant="ghost"
+                    className="flex-1"
+                    onClick={() => {
+                      cat.items
+                        .filter((q) => graded(team.id, q) < 2)
+                        .forEach((q) => {
+                          const p = entry(team.id, q.id).parts;
+                          void mark(team.id, q, false, p ? p.map((x) => x ?? false) : null);
+                        });
+                    }}
+                  >
+                    Neoznačene → narobe
+                  </Button>
+                )}
+                {nextSheet && (
+                  <Button className="flex-1" onClick={() => openSheet(nextSheet.cat, nextSheet.team.id)}>
+                    {nextSheet.cat.id === cat.id
+                      ? `Naslednji listek: ${nextSheet.team.name}`
+                      : `Kategorija ${catIdx + 2}: ${nextSheet.cat.name}`}
+                    <IconChevronRight />
+                  </Button>
+                )}
+              </div>
             </section>
           )}
 

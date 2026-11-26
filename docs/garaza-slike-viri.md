@@ -42,8 +42,8 @@ Fotografije z Wikimedia Commons (prenesene 2026-11-22), shranjene v bucketu `kvi
 | a3 | [The Duomo and Tower of Pisa at sunrise.jpg](https://commons.wikimedia.org/wiki/File:The_Duomo_and_Tower_of_Pisa_at_sunrise.jpg) |
 | a4 | [Dinosaur Egg Museum, Xixia Dinosaur Park- Psittacosaurus Skeleton 02.jpg](https://commons.wikimedia.org/wiki/File:Dinosaur_Egg_Museum,_Xixia_Dinosaur_Park-_Psittacosaurus_Skeleton_02.jpg) |
 | a5 | [EURO stardikomplekt.JPG](https://commons.wikimedia.org/wiki/File:EURO_stardikomplekt.JPG) |
-| s1 | [Schlenk flask 500mL.jpg](https://commons.wikimedia.org/wiki/File:Schlenk_flask_500mL.jpg) |
+| s1 | [Rijeka Sava, Zagreb.JPG](https://commons.wikimedia.org/wiki/File:Rijeka_Sava,_Zagreb.JPG) (Zagreb, prej zlato; v bucketu `7aa49b29-….jpg`) |
 | s2 | [CAPPELLA SISTINA Ceiling.jpg](https://commons.wikimedia.org/wiki/File:CAPPELLA_SISTINA_Ceiling.jpg) |
 | s3 | [Cuernos del Paine in Torres del Paine National Park.jpg](https://commons.wikimedia.org/wiki/File:Cuernos_del_Paine_in_Torres_del_Paine_National_Park.jpg) |
 | s4 | [The Armillary Sphere Sundial.jpg](https://commons.wikimedia.org/wiki/File:The_Armillary_Sphere_Sundial.jpg) |
-| s5 | [Cable-lacing-harness-mockup.jpg](https://commons.wikimedia.org/wiki/File:Cable-lacing-harness-mockup.jpg) |
+| s5 | [Sitka, Alaska - St Michael's Orthodox Cathedral (1).jpg](https://commons.wikimedia.org/wiki/File:Sitka,_Alaska_-_St_Michael%27s_Orthodox_Cathedral_(1).jpg) (Aljaska, prej Amper; v bucketu `1aebb4e5-….jpg`) |
