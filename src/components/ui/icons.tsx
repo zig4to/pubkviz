@@ -128,6 +128,14 @@ export const IconChevronRight = (p: SVGProps<SVGSVGElement>) => (
   </Base>
 );
 
+export const IconPrinter = (p: SVGProps<SVGSVGElement>) => (
+  <Base {...p}>
+    <path d="M6 9V2h12v7" />
+    <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+    <path d="M6 14h12v8H6z" />
+  </Base>
+);
+
 export const IconArrowLeft = (p: SVGProps<SVGSVGElement>) => (
   <Base {...p}>
     <path d="M19 12H5M12 19l-7-7 7-7" />
