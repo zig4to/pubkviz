@@ -2144,14 +2144,6 @@ function PointsTable({ data, outline }: { data: Data; outline: OutlineItem[] }) 
       <p className="text-center text-[1vw] text-white/40 max-lg:text-xs">
         zeleno = največ točk v kategoriji
       </p>
-      <div className="flex justify-center">
-        <Link
-          href="/"
-          className="rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-7 py-4 text-xl font-semibold shadow-xl shadow-violet-900/40 transition-transform hover:scale-[1.03]"
-        >
-          Zaključi kviz
-        </Link>
-      </div>
     </div>
   );
 }
