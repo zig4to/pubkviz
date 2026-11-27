@@ -47,11 +47,22 @@ function shuffle<T>(list: T[]): T[] {
   return a;
 }
 
+// Ime skupine glede na število članov: imena se vpišejo v dvojini (Kekca,
+// Pohančka). Skupina s 3 ali več člani dobi množino: moška dvojina na -a →
+// -i (Kekci, Pohančki). Za izjeme (npr. ženska imena) oba sklona z
+// poševnico: „Pepelkici / Pepelkice“ — prvo za 2, drugo za 3+.
+export function groupForm(name: string, members: number): string {
+  const [dual, plural] = name.split("/").map((x) => x.trim());
+  if (members < 3) return dual;
+  if (plural) return plural;
+  return /a$/.test(dual) ? dual.slice(0, -1) + "i" : dual;
+}
+
 // Imena skupin naključno dodeli skupinam; če jih je premalo, ostale dobijo
 // „Skupina N“, odvečna imena ostanejo neuporabljena.
-function drawLabels(teamNames: string[], count: number): string[] {
+function drawLabels(teamNames: string[], groups: string[][]): string[] {
   const picked = shuffle(teamNames);
-  return Array.from({ length: count }, (_, i) => picked[i] ?? `Skupina ${i + 1}`);
+  return groups.map((g, i) => (picked[i] ? groupForm(picked[i], g.length) : `Skupina ${i + 1}`));
 }
 
 function parseNames(text: string) {
@@ -114,7 +125,7 @@ export default function TeamDraw() {
   // razglasitve — rezultat se takoj pokaže pod obrazcem.
   const startDraw = (quick = false) => {
     const g = draw(men, women, size);
-    const l = drawLabels(teamNames, g.length);
+    const l = drawLabels(teamNames, g);
     setGroups(g);
     setLabels(l);
     setRound((r) => r + 1);
@@ -259,7 +270,7 @@ export default function TeamDraw() {
             value={teamText}
             onChange={(e) => update({ teams: e.target.value })}
             rows={4}
-            placeholder={"Jesenčki\nKvizovci\nPametnjakoviči\n…"}
+            placeholder={"Kekca\nPohančka\nPepelkici / Pepelkice\n…"}
             className="font-medium"
           />
           <p className="text-xs text-gray-500 dark:text-gray-400">
@@ -270,6 +281,10 @@ export default function TeamDraw() {
                 : teamNames.length > groupCount
                   ? "Imen je več kot skupin — odvečna imena ne bodo uporabljena."
                   : "Imena se bodo naključno dodelila skupinam."}
+          </p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Vpiši v dvojini (Kekca) — skupina s 3 ali več člani dobi množino (Kekci). Izjeme s poševnico:
+            „Pepelkici / Pepelkice“.
           </p>
         </div>
 

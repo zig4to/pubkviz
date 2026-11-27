@@ -419,9 +419,9 @@ export default function Scoring({ roomId }: { roomId: string }) {
                   Sledi odru (trenutno vprašanje {items[stageIdx]?.n} v „{items[stageIdx]?.category}“)
                 </button>
               )}
-              <div className="mb-4 rounded-xl border border-gray-200 p-3 dark:border-gray-800">
-                <p className="whitespace-pre-line text-sm">{plainPrompt(current.prompt)}</p>
-                <p className="mt-2 text-sm font-semibold text-emerald-700 dark:text-emerald-400">
+              <div className="mb-4 flex items-center gap-4 rounded-xl border border-gray-200 p-3 dark:border-gray-800">
+                <p className="min-w-0 flex-1 whitespace-pre-line text-sm">{plainPrompt(current.prompt)}</p>
+                <p className="w-[30%] shrink-0 text-2xl font-bold leading-tight text-emerald-700 dark:text-emerald-400">
                   ✓ {correctText(current)}
                 </p>
               </div>
@@ -488,7 +488,7 @@ export default function Scoring({ roomId }: { roomId: string }) {
                       }}
                       aria-pressed={sel}
                       className={clsx(
-                        "flex min-h-11 items-center gap-1.5 rounded-lg border px-3 py-2 text-left text-sm font-medium",
+                        "flex min-h-12 items-center gap-1.5 rounded-lg border px-3 py-2 text-left text-lg font-semibold",
                         sel
                           ? "border-violet-600 bg-violet-600 text-white"
                           : done
@@ -496,14 +496,14 @@ export default function Scoring({ roomId }: { roomId: string }) {
                             : "border-gray-300 dark:border-gray-700",
                       )}
                     >
-                      {done && <IconCheck className="h-4 w-4 shrink-0" />}
+                      {done && <IconCheck className="h-5 w-5 shrink-0" />}
                       <span className="min-w-0 truncate">{t.name}</span>
                     </button>
                   );
                 })}
               </div>
               <div className="mb-2 flex items-baseline justify-between gap-3">
-                <h2 className="min-w-0 truncate text-lg font-bold">{team.name}</h2>
+                <h2 className="min-w-0 truncate text-2xl font-bold">{team.name}</h2>
                 <span className="shrink-0 text-sm text-gray-500 dark:text-gray-400">
                   {fmt(teamScore(team.id, cat.items))} t. · skupaj{" "}
                   <b className="text-gray-900 dark:text-gray-100">{fmt(teamScore(team.id))}</b>
@@ -542,7 +542,9 @@ export default function Scoring({ roomId }: { roomId: string }) {
                   <Button className="flex-1" onClick={() => openSheet(nextSheet.cat, nextSheet.team.id)}>
                     {nextSheet.cat.id === cat.id
                       ? `Naslednji listek: ${nextSheet.team.name}`
-                      : `Kategorija ${catIdx + 2}: ${nextSheet.cat.name}`}
+                      : nextSheet.cat.name.trim().toLowerCase() === "bonus"
+                        ? "Bonus"
+                        : `Kategorija ${catIdx + 2}: ${nextSheet.cat.name}`}
                     <IconChevronRight />
                   </Button>
                 )}
@@ -742,11 +744,16 @@ function MarkRow({
         value === null && !partial && "border-gray-200 dark:border-gray-800",
       )}
     >
-      <div className="flex items-center gap-3">
+      {/* pr: gumba ✓/✗ malo odmaknjena od desnega roba */}
+      <div className="flex items-center gap-3 pr-8">
         <div className="min-w-0 flex-1">
           <div className="line-clamp-2 font-medium">{label}</div>
-          {sub && <div className="truncate text-xs text-gray-500 dark:text-gray-400">{sub}</div>}
+          {sub && !sub.startsWith("✓") && <div className="truncate text-xs text-gray-500 dark:text-gray-400">{sub}</div>}
         </div>
+        {sub?.startsWith("✓") && (
+          // Pravilni odgovor (po listkih): velik, desno od vprašanja — hitro primerjanje z listkom.
+          <div className="w-[28%] shrink-0 text-lg font-bold leading-snug text-emerald-700 dark:text-emerald-400">{sub}</div>
+        )}
         {n > 0 && (
           <span className="shrink-0 text-sm font-semibold tabular-nums">
             {fmt(entry.points)}/{q.points}

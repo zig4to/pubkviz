@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { LETTERS } from "@/lib/kviz";
-import type { KvizCategory, KvizQuestion, KvizQuiz } from "@/lib/types/database.types";
+import type { KvizCategory, KvizQuestion, KvizQuiz, KvizTiebreaker } from "@/lib/types/database.types";
 import Logo from "@/components/Logo";
 import Button from "@/components/ui/Button";
 import { IconArrowLeft, IconPrinter } from "@/components/ui/icons";
@@ -18,20 +18,47 @@ const PRINT_CSS = `
 }
 `;
 
+const isBonus = (name: string) => name.trim().toLowerCase() === "bonus";
+
+// **besedilo** v pravilih = poudarek (kot na odru).
+function Rules({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/\*\*(.+?)\*\*/g).map((part, i) =>
+        i % 2 ? (
+          <b key={i} className="font-bold text-black not-italic">
+            {part}
+          </b>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 const fmt = (n: number) => n.toLocaleString("sl-SI", { maximumFractionDigits: 2 });
 
 export default function AnswerSheets({
   quiz,
   categories,
   questions,
+  tiebreakers = [],
 }: {
   quiz: KvizQuiz;
   categories: KvizCategory[];
   questions: KvizQuestion[];
+  tiebreakers?: KvizTiebreaker[];
 }) {
   const byCat = (id: string) => questions.filter((q) => q.category_id === id);
-  const pairs: KvizCategory[][] = [];
-  for (let i = 0; i < categories.length; i += 2) pairs.push(categories.slice(i, i + 2));
+  // Listek za izenačenje (če ima kviz dodatna vprašanja) gre na konec — pri
+  // lihem številu kategorij zapolni prazno polovico zadnjega lista.
+  type Item = { kind: "cat"; cat: KvizCategory } | { kind: "tie" };
+  const items: Item[] = categories.map((cat) => ({ kind: "cat" as const, cat }));
+  if (tiebreakers.length > 0 && categories.length > 0) items.push({ kind: "tie" });
+  const pairs: Item[][] = [];
+  for (let i = 0; i < items.length; i += 2) pairs.push(items.slice(i, i + 2));
+  const key = (it: Item) => (it.kind === "cat" ? it.cat.id : "tie");
 
   return (
     <div className="min-h-screen bg-gray-200 text-black print:min-h-0 print:bg-white">
@@ -48,7 +75,7 @@ export default function AnswerSheets({
         <div className="min-w-0 flex-1">
           <div className="truncate font-semibold">Listki: {quiz.title}</div>
           <div className="text-xs text-gray-500">
-            {categories.length} kategorij · {pairs.length} {pairs.length === 1 ? "list" : "listov"} A4 ležeče ·
+            {categories.length} kategorij{tiebreakers.length > 0 ? " + izenačenje" : ""} · {pairs.length} {pairs.length === 1 ? "list" : "listov"} A4 ležeče ·
             natisni toliko kopij, kolikor je ekip, in razreži po črtkani črti
           </div>
         </div>
@@ -64,13 +91,17 @@ export default function AnswerSheets({
         <div className="flex flex-col items-center gap-6 py-6 print:block print:gap-0 print:py-0">
           {pairs.map((pair, i) => (
             <section
-              key={pair[0].id}
+              key={key(pair[0])}
               className="relative flex h-[210mm] w-[297mm] shrink-0 overflow-hidden bg-white shadow-lg print:shadow-none"
               style={{ breakAfter: i < pairs.length - 1 ? "page" : "auto" }}
             >
-              {pair.map((cat, j) => (
-                <Sheet key={cat.id} index={i * 2 + j + 1} category={cat} questions={byCat(cat.id)} />
-              ))}
+              {pair.map((it, j) =>
+                it.kind === "cat" ? (
+                  <Sheet key={it.cat.id} index={i * 2 + j + 1} category={it.cat} questions={byCat(it.cat.id)} />
+                ) : (
+                  <TiebreakSheet key="tie" />
+                ),
+              )}
               {pair.length === 1 && <div className="w-1/2" />}
               <div
                 aria-hidden="true"
@@ -100,9 +131,19 @@ function Sheet({ index, category, questions }: { index: number; category: KvizCa
           <span className="mb-[1mm] flex-1 border-b-[1.5px] border-black" />
         </div>
         <h2 className="mt-[5mm] text-[15pt] leading-tight font-bold">
-          <span className="text-gray-500">{index}.</span> {category.name}
+          {isBonus(category.name) ? (
+            "Bonus"
+          ) : (
+            <>
+              <span className="text-gray-500">{index}.</span> {category.name}
+            </>
+          )}
         </h2>
-        {rules && <p className="mt-[1.5mm] text-[8.5pt] leading-snug text-gray-600 italic">{rules}</p>}
+        {rules && (
+          <p className="mt-[1.5mm] text-[8.5pt] leading-snug text-gray-600 italic">
+            <Rules text={rules} />
+          </p>
+        )}
       </header>
 
       <ol className="mt-[4mm] flex min-h-0 flex-1 flex-col">
@@ -154,4 +195,35 @@ function Answer({ q }: { q: KvizQuestion }) {
     );
   }
   return <span className="mb-[1mm] flex-1 border-b border-black" />;
+}
+
+// Izenačenje: ekipe z enakimi točkami napišejo odgovor na dodatno vprašanje
+// („kdor je bližji, zmaga“). Brez točk — samo vrstice za odgovore.
+function TiebreakSheet() {
+  return (
+    <div className="flex h-full w-1/2 flex-col px-[12mm] pt-[10mm] pb-[9mm]">
+      <header className="shrink-0">
+        <div className="flex items-center gap-2 text-[9pt] font-semibold tracking-wide text-gray-600 uppercase">
+          <Logo className="h-[6mm] w-[6mm]" />
+          Garaža pub kviz
+        </div>
+        <div className="mt-[5mm] flex items-end gap-2 text-[13pt] font-semibold">
+          Ekipa:
+          <span className="mb-[1mm] flex-1 border-b-[1.5px] border-black" />
+        </div>
+        <h2 className="mt-[5mm] text-[15pt] leading-tight font-bold">Izenačenje</h2>
+        <p className="mt-[1.5mm] text-[8.5pt] leading-snug text-gray-600 italic">
+          Samo za ekipe z enakim številom točk. Napišite številko — zmaga ekipa, ki je bližje pravilnemu odgovoru.
+        </p>
+      </header>
+      <ol className="mt-[4mm] flex min-h-0 flex-1 flex-col">
+        {[1, 2, 3].map((k) => (
+          <li key={k} className="flex max-h-[24mm] min-h-[9mm] flex-1 items-end gap-[3mm] pb-[1.5mm]">
+            <span className="w-[7mm] shrink-0 text-right text-[12pt] font-bold tabular-nums">{k}.</span>
+            <span className="mb-[1mm] flex-1 border-b border-black" />
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }

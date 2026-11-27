@@ -10,7 +10,7 @@ import type { CategoryExample, KvizAnswer, KvizPlayer, KvizQuestion, KvizRoom, K
 import { IconArrowLeft, IconCheck, IconChevronRight, IconUsers, IconX } from "@/components/ui/icons";
 import clsx from "@/lib/utils/clsx";
 
-type OutlineItem = { categoryId: string; category: string };
+type OutlineItem = { categoryId: string; category: string; points?: number };
 type AnswerInfo = Pick<KvizQuestion, "id" | "category_id" | "type" | "prompt" | "options" | "correct_index" | "accepted_answers" | "explanation" | "section">;
 
 // Razvrstitev klasičnega kviza: točke padajoče, nato izenačenje (0016,
@@ -105,7 +105,7 @@ export default function Stage({ roomId }: { roomId: string }) {
     void Promise.all([
       supabase
         .from("kviz_questions")
-        .select("id, category_id, type, prompt, options, correct_index, accepted_answers, explanation, section")
+        .select("id, category_id, type, prompt, options, correct_index, accepted_answers, explanation, section, points")
         .in("id", ids),
       supabase.from("kviz_categories").select("id, name, example, summary").eq("quiz_id", roomQuizId),
       supabase.from("kviz_tiebreakers").select("*").eq("quiz_id", roomQuizId).order("position").order("created_at"),
@@ -113,6 +113,7 @@ export default function Stage({ roomId }: { roomId: string }) {
       if (!alive) return;
       setTiebreakers(tbs.data ?? []);
       const catOf = new Map((qs.data ?? []).map((q) => [q.id, q.category_id]));
+      const ptsOf = new Map((qs.data ?? []).map((q) => [q.id, Number(q.points)]));
       setAnswerInfo(ids.map((id) => (qs.data ?? []).find((q) => q.id === id) ?? null));
       const nameOf = new Map((cats.data ?? []).map((c) => [c.id, c.name]));
       setExamples(new Map((cats.data ?? []).flatMap((c) => (c.example?.items?.length || c.example?.choice ? [[c.id, c.example] as const] : []))));
@@ -120,7 +121,7 @@ export default function Stage({ roomId }: { roomId: string }) {
       setOutline(
         ids.map((id) => {
           const cid = catOf.get(id) ?? "?";
-          return { categoryId: cid, category: nameOf.get(cid) ?? "Kategorija" };
+          return { categoryId: cid, category: nameOf.get(cid) ?? "Kategorija", points: ptsOf.get(id) ?? 0 };
         })
       );
     });
@@ -227,6 +228,23 @@ export default function Stage({ roomId }: { roomId: string }) {
     [standings]
   );
   const tieQuestionIdx = standings.filter((r) => r.tiebreak !== null).length; // vsaka odločitev porabi eno vprašanje
+  // Naključen vrstni red vprašanj za izenačenje, a stalen za sobo (seme = id
+  // sobe): po osvežitvi ali na drugem računalniku je zaporedje enako.
+  const roomIdForSeed = data?.room.id ?? "";
+  const shuffledTiebreakers = useMemo(() => {
+    let h = 2166136261;
+    for (const ch of roomIdForSeed) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+    const rand = () => {
+      h = Math.imul(h ^ (h >>> 15), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909);
+      return ((h ^= h >>> 16) >>> 0) / 4294967296;
+    };
+    const arr = [...tiebreakers];
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }, [tiebreakers, roomIdForSeed]);
   const tieBlock = data?.room.state === "finished" && step === 3 && openTies.length > 0;
 
   // Klasični konec po tabeli točk: diaprojekcija odgovorov po ekipah, po dve
@@ -300,13 +318,13 @@ export default function Stage({ roomId }: { roomId: string }) {
       : room.state === "question"
         ? room.current?.last_in_category
           ? room.q_index + 1 >= room.question_ids.length
-            ? "Konec kviza"
+            ? "Naprej"
             : "Konec kategorije"
           : "Naslednje vprašanje"
         : reviewable && step === 0
           ? "Pregled odgovorov"
           : room.state === "finished" && step === 1
-            ? "Zaključek"
+            ? "Konec kviza"
           : room.state === "finished" && step === 2
             ? "Končni rezultati"
           : room.state === "finished" && step >= 3 && step < 3 + data.teams.length
@@ -350,7 +368,7 @@ export default function Stage({ roomId }: { roomId: string }) {
     if (!classic) return [];
     const n = data.teams.length;
     const out = [
-      { label: "Zahvala", group: "Zahvala" },
+      { label: "Konec kviza", group: "Konec kviza" },
       { label: "Končni rezultati", group: "Rezultati" },
       ...standings.map((_, k) => ({ label: `${n - k}. mesto`, group: "Rezultati" })),
       { label: "Tabela točk", group: "Tabela" },
@@ -470,7 +488,7 @@ export default function Stage({ roomId }: { roomId: string }) {
           <ExampleSlide key={room.q_index} category={room.current.category} example={example} solved={step >= 2} />
         )}
         {classic && (room.state === "lobby" || ((room.state === "scoreboard" || room.state === "finished") && step === 0)) && (
-          <ClassicBreak room={room} />
+          <ClassicBreak room={room} nextCategory={outline?.[room.q_index + 1]?.category} />
         )}
         {reviewable && step === 1 && outline && (
           <AnswerReview key={introKey} room={room} outline={outline} answers={answerInfo} />
@@ -496,7 +514,7 @@ export default function Stage({ roomId }: { roomId: string }) {
           <TiebreakView
             key={openTies[0].map((t) => t.id).join(",")}
             group={openTies[0]}
-            question={tiebreakers[tieQuestionIdx] ?? null}
+            question={shuffledTiebreakers[tieQuestionIdx] ?? null}
             canReset={tieQuestionIdx > 0}
             onWin={async (teamId) => {
               const { error } = await supabase.rpc("kviz_host_tiebreak_win", { p_team: teamId });
@@ -641,8 +659,8 @@ function Timeline({
         e.currentTarget.blur();
         if (!s.active) onJump(s);
       }}
-      title={`Kategorija ${si + 1} · ${s.label}`}
-      aria-label={`Kategorija ${si + 1}, ${s.label}`}
+      title={`${catLabel(segments[si]?.name, si + 1)} · ${s.label}`}
+      aria-label={`${catLabel(segments[si]?.name, si + 1)}, ${s.label}`}
       aria-current={s.active ? "step" : undefined}
       className={clsx(
         "h-2 w-2 rounded-full transition-colors disabled:cursor-wait",
@@ -687,7 +705,7 @@ function Timeline({
                     isCat ? "text-cyan-300" : catDone ? "text-white/60" : "text-white/35"
                   )}
                 >
-                  <span className="truncate">Kategorija {si + 1}</span>
+                  <span className="truncate">{catLabel(seg.name, si + 1)}</span>
                 </button>
                 <div
                   role="tooltip"
@@ -720,8 +738,8 @@ function Timeline({
                         // Prvo vprašanje druge kategorije → najprej njen uvod.
                         if (!isActive) onPick(i, k === 0 && !isCat);
                       }}
-                      title={`Kategorija ${si + 1} · vprašanje ${k + 1}`}
-                      aria-label={`Kategorija ${si + 1}, vprašanje ${k + 1}`}
+                      title={`${catLabel(seg.name, si + 1)} · vprašanje ${k + 1}`}
+                      aria-label={`${catLabel(seg.name, si + 1)}, vprašanje ${k + 1}`}
                       aria-current={isActive ? "step" : undefined}
                       className={clsx(
                         "relative z-10 flex aspect-square shrink-0 items-center justify-center rounded-full font-bold tabular-nums transition-all duration-200 disabled:cursor-wait",
@@ -766,6 +784,14 @@ function Timeline({
       </ol>
     </nav>
   );
+}
+
+// Kategorija z imenom „Bonus“ nima zaporedne številke: povsod se pokaže z imenom.
+function isBonus(name: string | null | undefined) {
+  return (name ?? "").trim().toLowerCase() === "bonus";
+}
+function catLabel(name: string | null | undefined, n: number | string) {
+  return isBonus(name) ? "Bonus" : `Kategorija ${n}`;
 }
 
 function toggleFullscreen() {
@@ -1014,7 +1040,7 @@ function QuestionStage({
       <div className={clsx("flex flex-1 gap-[2.5vw]", img ? "items-center max-lg:flex-col" : "flex-col justify-center")}>
         {img && (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={img} alt="" className="max-h-[36vh] max-w-[30vw] rounded-2xl object-contain shadow-2xl max-lg:max-w-full" />
+          <img src={img} alt="" className="max-h-[44vh] max-w-[36vw] rounded-2xl object-contain shadow-2xl max-lg:max-w-full" />
         )}
         {c.prompt.includes("\n") ? (
           // Večvrstično vprašanje (npr. Ugotovi letnico): vsak dogodek v svoji
@@ -1210,7 +1236,7 @@ function CategoryIntro({ current }: { current: NonNullable<KvizRoom["current"]> 
 
       <div className="text-center lg:text-left">
         <div className="draw-pop text-[1.5vw] font-bold uppercase tracking-[0.35em] text-cyan-300 max-lg:text-sm" style={{ animationDelay: "120ms" }}>
-          Kategorija {n} od {current.category_total}
+          {isBonus(current.category) ? "Dodatna vprašanja" : `Kategorija ${n} od ${current.category_total}`}
         </div>
         <h1
           className="draw-land mt-[1vw] break-words bg-clip-text pb-[0.14em] text-[6.5vw] font-black leading-[1.05] text-transparent max-lg:text-6xl"
@@ -1269,7 +1295,16 @@ function ExampleSlide({ category, example, solved }: { category: string; example
             className="draw-pop mx-auto mt-[1vh] max-w-[78vw] text-[min(1.8vw,3.1vh)] font-medium leading-snug text-white/90 max-lg:max-w-full max-lg:text-lg"
             style={{ animationDelay: "150ms" }}
           >
-            {example.rules}
+            {/* **besedilo** v pravilih = poudarek (druga barva). */}
+            {example.rules.split(/\*\*(.+?)\*\*/g).map((part, i) =>
+              i % 2 ? (
+                <b key={i} className="font-black text-amber-300">
+                  {part}
+                </b>
+              ) : (
+                part
+              )
+            )}
           </p>
         )}
       </div>
@@ -1461,7 +1496,7 @@ function QuestionSummary({
     <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col justify-center gap-[min(1.6vw,2.6vh)]">
       <div className="text-center">
         <div className="draw-pop text-[min(1.1vw,1.9vh)] font-bold uppercase tracking-[0.35em] text-cyan-300 max-lg:text-xs">
-          Kategorija {room.current?.category_index ?? ""} · {room.current?.category ?? ""}
+          {isBonus(room.current?.category) ? room.current?.category : `Kategorija ${room.current?.category_index ?? ""} · ${room.current?.category ?? ""}`}
         </div>
         <h1 className="draw-land mt-[0.3vh] text-[min(3vw,5.2vh)] font-black leading-tight max-lg:text-3xl">Vsa vprašanja</h1>
       </div>
@@ -1503,12 +1538,14 @@ function AnswerReview({
   const years = idx.length > 0 && idx.every((i) => answers[i]?.type === "text" && /^\d{3,4}$/.test(answers[i]?.accepted_answers?.[0] ?? ""));
   // Miksi skladb (odgovor „izvajalec – naslov · izvajalec – naslov“): širok
   // stolpec odgovorov, vprašanje skrajšano na „Miks N“.
-  const mixes = idx.length > 0 && idx.some((i) => (answers[i]?.accepted_answers?.[0] ?? "").includes(" · "));
+  // Bonus: odgovori v dveh vrsticah (Švica / Vatikan …) — ožji stolpec čisto desno.
+  const bonus = isBonus(room.current?.category);
+  const mixes = !bonus && idx.length > 0 && idx.some((i) => (answers[i]?.accepted_answers?.[0] ?? "").includes(" · "));
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col justify-center gap-[min(1.6vw,2.6vh)]">
       <div className="text-center">
         <div className="draw-pop text-[min(1.1vw,1.9vh)] font-bold uppercase tracking-[0.35em] text-cyan-300 max-lg:text-xs">
-          Kategorija {room.current?.category_index ?? ""} · {room.current?.category ?? ""}
+          {isBonus(room.current?.category) ? room.current?.category : `Kategorija ${room.current?.category_index ?? ""} · ${room.current?.category ?? ""}`}
         </div>
         <h1 className="draw-land mt-[0.3vh] text-[min(3vw,5.2vh)] font-black leading-tight max-lg:text-3xl">Pravilni odgovori</h1>
       </div>
@@ -1561,11 +1598,13 @@ function AnswerReview({
                   "flex shrink-0 items-center gap-[min(0.6vw,1vh)] font-black",
                   years
                     ? "mr-[min(1.6vw,2.8vh)] w-[16%] justify-end text-right text-[min(3vw,5.2vh)] tracking-wide"
+                    : bonus
+                      ? "mr-[min(0.4vw,0.7vh)] w-[25%] justify-start text-left text-[min(1.8vw,3.1vh)]"
                     : mixes
                       ? "mr-[min(1vw,1.7vh)] w-[60%] justify-start text-left text-[min(1.8vw,3.1vh)]"
                     : two
                       ? "mr-[min(0.8vw,1.4vh)] w-[26%] justify-start text-left text-[min(1.5vw,2.6vh)]"
-                      : "mr-[min(1vw,1.7vh)] w-[24%] justify-start text-left text-[min(1.8vw,3.1vh)]",
+                      : "mr-[min(1vw,1.7vh)] w-[33%] justify-start text-left text-[min(1.8vw,3.1vh)]",
                   "max-lg:text-lg"
                 )}
               >
@@ -1577,7 +1616,7 @@ function AnswerReview({
                     >
                       {LETTERS[q!.correct_index!]})
                     </span>
-                    <span className="truncate text-emerald-300">{q!.options[q!.correct_index!]}</span>
+                    <span className="min-w-0 break-words leading-tight text-emerald-300">{q!.options[q!.correct_index!]}</span>
                   </>
                 ) : (
                   <span className="min-w-0 break-words leading-tight text-emerald-300">
@@ -1600,14 +1639,15 @@ function AnswerReview({
 
 // Klasični kviz (listki): začetek, premor med kategorijami in konec — brez
 // kode, QR, ekip in točk.
-function ClassicBreak({ room }: { room: KvizRoom }) {
+function ClassicBreak({ room, nextCategory }: { room: KvizRoom; nextCategory?: string }) {
   const total = room.question_ids.length;
   const [kicker, title, sub] =
     room.state === "lobby"
       ? ["Klasični pub kviz", room.title, `${total} ${total === 1 ? "vprašanje" : total === 2 ? "vprašanji" : total < 5 ? "vprašanja" : "vprašanj"} · pripravite listke in pisala`]
       : room.state === "scoreboard"
-        ? [`Konec kategorije: ${room.current?.category ?? ""}`, "Oddajte listke", `Sledi ${(room.current?.category_index ?? 0) + 1}. kategorija od ${room.current?.category_total ?? "?"}`]
-        : [room.title, "Konec kviza", "Hvala za sodelovanje! Oddajte zadnje listke."];
+        ? [`Konec kategorije: ${room.current?.category ?? ""}`, "Oddajte listke", isBonus(nextCategory) ? "Sledijo še bonus vprašanja" : `Sledi ${(room.current?.category_index ?? 0) + 1}. kategorija od ${room.current?.category_total ?? "?"}`]
+        : // Po zadnji kategoriji: najprej listki in pravilni odgovori, „Konec kviza“ je šele zahvala (ThankYou).
+          [`Konec kategorije: ${room.current?.category ?? ""}`, "Oddajte zadnje listke", "Sledijo pravilni odgovori"];
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-[1.5vw] text-center">
       <div className="text-[1.6vw] uppercase tracking-widest text-cyan-300 max-lg:text-sm">{kicker}</div>
@@ -1635,6 +1675,7 @@ function TiebreakView({
   onWin: (teamId: string) => Promise<void>;
   onReset: () => Promise<void>;
 }) {
+  const [qShown, setQShown] = useState(false); // najprej samo ekipe, vprašanje šele na gumb
   const [shown, setShown] = useState(false);
   const [busy, setBusy] = useState(false);
   const fmt = (x: number) => String(Math.round(x * 100) / 100).replace(".", ",");
@@ -1650,25 +1691,43 @@ function TiebreakView({
       <div className="kviz-pop text-[min(1.6vw,2.8vh)] font-bold uppercase tracking-[0.3em] text-amber-300">
         Izenačenje · {fmt(group[0].score)} t.
       </div>
-      <div className="flex flex-wrap justify-center gap-x-[2vw] gap-y-2 text-[min(2.4vw,4vh)] font-black">
+      <div className="flex flex-wrap items-start justify-center gap-x-[2vw] gap-y-3">
         {group.map((t, i) => (
-          <span key={t.id}>
-            {i > 0 && <span className="mr-[2vw] text-white/30">vs</span>}
-            {t.name}
-          </span>
+          <Fragment key={t.id}>
+            {i > 0 && <span className="self-center text-[min(2vw,3.4vh)] font-black text-white/30">vs</span>}
+            <div className="flex max-w-[28vw] flex-col items-center gap-1">
+              <span className="text-[min(2.4vw,4vh)] font-black leading-tight">{t.name}</span>
+              {t.members.length > 0 && (
+                <span className="text-[min(1.2vw,2.1vh)] font-medium leading-snug text-white/60">
+                  {t.members.join(", ")}
+                </span>
+              )}
+            </div>
+          </Fragment>
         ))}
       </div>
       <div className="text-[min(1.3vw,2.3vh)] uppercase tracking-widest text-white/50">
         Dodatno vprašanje — kdor je bližji, zmaga
       </div>
-      {question ? (
-        <h1 className="max-w-5xl text-balance text-[min(3.6vw,6.5vh)] font-black leading-tight">{question.prompt}</h1>
+      {question && !qShown ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.currentTarget.blur();
+            setQShown(true);
+          }}
+          className="rounded-2xl bg-gradient-to-r from-cyan-500 to-violet-600 px-8 py-4 text-[min(1.8vw,3vh)] font-bold shadow-xl shadow-violet-900/40 transition-transform hover:scale-[1.03]"
+        >
+          Prikaži odločilno vprašanje
+        </button>
+      ) : question ? (
+        <h1 className="kviz-pop max-w-5xl text-balance text-[min(3.6vw,6.5vh)] font-black leading-tight">{question.prompt}</h1>
       ) : (
         <p className="text-[min(2vw,3.5vh)] text-white/60">
           Ni več pripravljenih dodatnih vprašanj — dodaj jih v urejevalniku ali izberi zmagovalca.
         </p>
       )}
-      {question && (
+      {question && qShown && (
         <div className="min-h-[12vh]">
           {shown ? (
             <div className="kviz-pop">
@@ -1727,6 +1786,7 @@ function TiebreakView({
 function ThankYou() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-[2vw] text-center">
+      <div className="draw-pop text-[1.6vw] font-bold uppercase tracking-[0.35em] text-cyan-300 max-lg:text-sm">Konec kviza</div>
       <h1 className="bg-gradient-to-r from-cyan-300 to-violet-400 bg-clip-text text-[7vw] font-black leading-tight text-transparent max-lg:text-5xl">
         To je bilo to!
       </h1>
@@ -2127,6 +2187,10 @@ function PointsTable({ data, outline }: { data: Data; outline: OutlineItem[] }) 
     if (!cats.some((c) => c.id === it.categoryId)) cats.push({ id: it.categoryId, name: it.category });
   });
   const catOf = new Map(room.question_ids.map((qid, i) => [qid, outline[i]?.categoryId]));
+  // Največ možnih točk po kategorijah (vsota točk vprašanj) → prikaz „4/5“.
+  const maxOf = new Map<string, number>();
+  outline.forEach((it) => maxOf.set(it.categoryId, (maxOf.get(it.categoryId) ?? 0) + (it.points ?? 0)));
+  const maxTotal = [...maxOf.values()].reduce((a, b) => a + b, 0);
   const rows = teams
     .map((t) => {
       const byCat = new Map<string, number>();
@@ -2144,63 +2208,73 @@ function PointsTable({ data, outline }: { data: Data; outline: OutlineItem[] }) 
   const best = new Map(cats.map((c) => [c.id, Math.max(0, ...rows.map((r) => r.byCat.get(c.id) ?? 0))]));
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-1 flex-col justify-center gap-[1.5vw]">
+    <div className="mx-auto flex w-full max-w-[82vw] flex-1 flex-col justify-center gap-[1.5vw] pb-[7vh]">
       <div className="text-center">
         <div className="text-[1.4vw] uppercase tracking-widest text-cyan-300 max-lg:text-sm">{room.title}</div>
         <h1 className="text-[3.5vw] font-black max-lg:text-3xl">Tabela točk</h1>
       </div>
-      <table className="w-full text-[1.5vw] tabular-nums max-lg:text-base">
+      {/* table-fixed: vsi stolpci kategorij enako široki (ostanek po #, Ekipa, Skupaj). */}
+      <table className="w-full table-fixed text-[1.55vw] tabular-nums max-lg:text-base">
         <thead>
           <tr className="align-bottom text-[1.1vw] uppercase tracking-wide text-white/50 max-lg:text-xs">
-            <th className="py-2 pr-3 text-right">#</th>
-            <th className="py-2 pr-3 text-left">Ekipa</th>
+            <th className="w-[4%] py-2 pr-3 text-right">#</th>
+            <th className="w-[16%] py-2 pr-3 text-left">Ekipa</th>
             {cats.map((c, i) => (
-              <th key={c.id} className="px-1 py-2 text-center align-bottom" title={c.name}>
+              <th key={c.id} className="border-l border-white/15 px-1 py-2 text-center align-top" title={c.name}>
                 K{i + 1}
                 <div className="mx-auto max-w-[8vw] text-balance text-[0.7vw] font-normal normal-case leading-tight tracking-normal text-white/40 max-lg:text-[9px]">
                   {c.name.toLowerCase()}
                 </div>
               </th>
             ))}
-            <th className="py-2 pl-3 text-right text-cyan-300">Skupaj</th>
+            <th className="w-[10%] border-l border-white/15 py-2 pl-3 text-right text-cyan-300">Skupaj</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((r) => {
             const rk = placeIn(rows, r);
             return (
-              <tr key={r.id} className="border-t border-white/10">
+              <tr key={r.id} className="border-t border-white/20">
                 <td
                   className={clsx(
-                    "py-[0.6vw] pr-3 text-right font-black",
+                    "py-[0.65vw] pr-3 text-right font-black",
                     rk === 1 ? "text-amber-300" : rk === 2 ? "text-slate-300" : rk === 3 ? "text-orange-400" : "text-white/40",
                   )}
                 >
                   {rk}.
                 </td>
-                <td className="max-w-[20vw] truncate py-[0.6vw] pr-3 font-semibold">{r.name}</td>
+                <td className="truncate py-[0.65vw] pr-3 font-semibold">{r.name}</td>
                 {cats.map((c) => {
                   const v = r.byCat.get(c.id) ?? 0;
                   return (
                     <td
                       key={c.id}
                       className={clsx(
-                        "px-1 py-[0.6vw] text-center",
+                        "border-l border-white/15 px-1 py-[0.65vw] text-center",
                         v > 0 && v === best.get(c.id) ? "font-bold text-emerald-300" : "text-white/70",
                       )}
                     >
                       {fmt(v)}
+                      {maxOf.get(c.id) ? (
+                        <span className="text-[0.75em] font-normal text-white/35">/{fmt(maxOf.get(c.id)!)}</span>
+                      ) : null}
                     </td>
                   );
                 })}
-                <td className="py-[0.6vw] pl-3 text-right text-[1.8vw] font-black max-lg:text-lg">{fmt(r.total)}</td>
+                <td className="border-l border-white/15 py-[0.65vw] pl-3 text-right text-[1.85vw] font-black max-lg:text-lg">
+                  {fmt(r.total)}
+                  {maxTotal > 0 && <span className="text-[0.6em] font-normal text-white/35">/{fmt(maxTotal)}</span>}
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
-      <p className="text-center text-[1vw] text-white/40 max-lg:text-xs">
-        zeleno = največ točk v kategoriji
+      <p className="text-center text-[1.5vw] text-white/50 max-lg:text-sm">
+        <span className="font-semibold text-white/70">4</span>
+        <span className="text-white/35">/5</span> = pravilni odgovori (točke) / vse možne točke v kategoriji
+        <span className="mx-[1vw] text-white/20">·</span>
+        <span className="font-semibold text-emerald-300">zeleno</span> = največ točk v kategoriji
       </p>
     </div>
   );
@@ -2310,7 +2384,7 @@ function TeamAnswersSlide({
             <section key={c.id} className="draw-pop flex min-w-0 flex-col gap-[min(0.6vw,1vh)]">
               <div className="flex items-baseline justify-between gap-3 border-b border-white/15 pb-[min(0.5vw,0.8vh)]">
                 <h2 className="truncate text-[min(1.7vw,2.9vh)] font-bold max-lg:text-lg">
-                  <span className="text-cyan-300">Kategorija {n}:</span> {c.name}
+                  <span className="text-cyan-300">{isBonus(c.name) ? "Bonus" : `Kategorija ${n}:`}</span> {isBonus(c.name) ? "" : c.name}
                 </h2>
                 <span className="shrink-0 font-mono text-[min(1.5vw,2.6vh)] font-bold text-white/80 max-lg:text-base">
                   {fmt(total(team.id, qids))} t.

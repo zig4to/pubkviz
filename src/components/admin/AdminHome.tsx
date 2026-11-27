@@ -56,6 +56,7 @@ export default function AdminHome({
   };
 
   const finish = async (roomId: string) => {
+    if (!window.confirm("Ali res želiš končati kviz?\n\nIgra izgine s seznama odprtih iger (oder in točke ostanejo dosegljivi prek kode).")) return;
     setBusy(roomId);
     await supabase.rpc("kviz_finish", { p_room: roomId });
     setBusy(null);
