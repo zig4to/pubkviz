@@ -652,7 +652,7 @@ function Timeline({
   const dense = outline.length > 36;
 
   return (
-    <nav aria-label="Časovnica kviza" className="w-full border-b border-white/10 bg-black/30 px-[2vw] pb-3 pt-2.5 backdrop-blur">
+    <nav aria-label="Časovnica kviza" className="relative z-40 w-full border-b border-white/10 bg-black/30 px-[2vw] pb-3 pt-2.5 backdrop-blur">
       <ol className="flex w-full gap-[0.9vw]">
         {segments.map((seg, si) => {
           const isCat = seg.categoryId === activeCat;
@@ -718,19 +718,20 @@ function Timeline({
                 const isLast = si === segments.length - 1;
                 return (
                   <>
-                    <div className="flex items-center justify-between px-1">
+                    <div className="relative flex items-center justify-between px-1">
                       <div className="flex gap-1">{before.map((s) => dot(s, si))}</div>
                       <div className="flex gap-1">{after.map((s) => dot(s, si))}</div>
-                    </div>
-                    {isLast && endGroups.length > 0 && (
-                      <div className="flex flex-wrap justify-end gap-x-2 gap-y-1 border-t border-white/10 px-1 pt-1">
+                      {/* Konec kviza: lebdi pod črto nad stranjo, brez svoje vrstice v časovnici. */}
+                      {isLast && endGroups.length > 0 && (
+                      <div className="absolute right-0 top-full z-40 mt-1 flex flex-wrap justify-end gap-x-2 gap-y-1 rounded-b-md border-t border-white/10 bg-gray-950/70 px-1 pb-1 pt-1 backdrop-blur">
                         {endGroups.map((g) => (
                           <div key={g.name + g.items[0].step} className="flex gap-1" title={g.name}>
                             {g.items.map((s) => dot(s, si))}
                           </div>
                         ))}
                       </div>
-                    )}
+                      )}
+                    </div>
                   </>
                 );
               })()}
