@@ -76,6 +76,8 @@ export type KvizQuestion = {
   points: number;
   /** 0015: oznake delov za delne točke (npr. miks: 4 deli po ½); prazno = celo vprašanje. */
   parts: string[];
+  /** 0017: vmesni slajd pred vprašanjem (1. vrstica naslov, ostalo podnaslov). */
+  section?: string | null;
   created_at: string;
 };
 

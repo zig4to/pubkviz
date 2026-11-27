@@ -11,7 +11,7 @@ import { IconArrowLeft, IconCheck, IconChevronRight, IconUsers, IconX } from "@/
 import clsx from "@/lib/utils/clsx";
 
 type OutlineItem = { categoryId: string; category: string };
-type AnswerInfo = Pick<KvizQuestion, "id" | "category_id" | "type" | "prompt" | "options" | "correct_index" | "accepted_answers" | "explanation">;
+type AnswerInfo = Pick<KvizQuestion, "id" | "category_id" | "type" | "prompt" | "options" | "correct_index" | "accepted_answers" | "explanation" | "section">;
 
 // Razvrstitev klasičnega kviza: točke padajoče, nato izenačenje (0016,
 // kviz_teams.tiebreak: 1 = zmagal izenačenje; null = neodločeno, zadnji).
@@ -105,7 +105,7 @@ export default function Stage({ roomId }: { roomId: string }) {
     void Promise.all([
       supabase
         .from("kviz_questions")
-        .select("id, category_id, type, prompt, options, correct_index, accepted_answers, explanation")
+        .select("id, category_id, type, prompt, options, correct_index, accepted_answers, explanation, section")
         .in("id", ids),
       supabase.from("kviz_categories").select("id, name, example, summary").eq("quiz_id", roomQuizId),
       supabase.from("kviz_tiebreakers").select("*").eq("quiz_id", roomQuizId).order("position").order("created_at"),
@@ -164,6 +164,11 @@ export default function Stage({ roomId }: { roomId: string }) {
     data?.room.state === "question" &&
     !!data.room.current?.last_in_category &&
     summaryCats.has(data.room.current?.category_id ?? "");
+  // 0017: vmesni slajd pred vprašanjem — korak 0 = slajd, vprašanje od koraka 1
+  // (pregled vprašanj se zamakne za en korak).
+  const section =
+    data?.room.state === "question" ? (answerInfo[data.room.q_index]?.section?.trim() || null) : null;
+  const secOff = section ? 1 : 0;
 
   // Skok na skriti zaslon kategorije (pike pod časovnico): kviz_goto na
   // vprašanje / uvod, za „Oddajte listke“ še kviz_next (→ scoreboard ali
@@ -236,8 +241,12 @@ export default function Stage({ roomId }: { roomId: string }) {
       setIntroStep({ key: introKey, step: step + 1 });
       return;
     }
-    if ((reviewable || summaryNow) && step < 1) {
+    if (section && step < 1) {
       setIntroStep({ key: introKey, step: 1 });
+      return;
+    }
+    if ((reviewable || summaryNow) && step < 1 + secOff) {
+      setIntroStep({ key: introKey, step: 1 + secOff });
       return;
     }
     // Klasični konec: po pregledu zadnjih odgovorov še korak 2 = zahvala,
@@ -254,7 +263,7 @@ export default function Stage({ roomId }: { roomId: string }) {
     if (error) setError(errorText(error));
     await load();
     setBusy(false);
-  }, [busy, data, supabase, roomId, load, example, step, introKey, reviewable, summaryNow, endStep, revealHold, tieBlock]);
+  }, [busy, data, supabase, roomId, load, example, step, introKey, reviewable, summaryNow, section, secOff, endStep, revealHold, tieBlock]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -275,7 +284,9 @@ export default function Stage({ roomId }: { roomId: string }) {
   const { room } = data;
   const classic = room.mode === "classic";
 
-  const nextLabel = summaryNow && step === 0
+  const nextLabel = section && step === 0
+    ? "Prvo vprašanje"
+    : summaryNow && step === secOff
     ? "Pregled vprašanj"
     : room.state === "intro"
     ? example && step === 0
@@ -518,10 +529,12 @@ export default function Stage({ roomId }: { roomId: string }) {
           await supabase.rpc("kviz_host_remove_member", { p_team: teamId, p_name: name });
           await load();
         }} />}
-        {summaryNow && step === 1 && outline && (
+        {section && step === 0 && <SectionSlide key={introKey} text={section} category={room.current?.category ?? ""} />}
+        {summaryNow && step === 1 + secOff && outline && (
           <QuestionSummary key={introKey} room={room} outline={outline} answers={answerInfo} />
         )}
-        {(room.state === "question" || room.state === "reveal") && room.current && !(summaryNow && step === 1) && (
+        {(room.state === "question" || room.state === "reveal") && room.current &&
+          !(summaryNow && step === 1 + secOff) && !(section && step === 0) && (
           <QuestionStage
             data={data}
             onSetCorrect={async (id, ok) => {
@@ -1217,6 +1230,30 @@ function CategoryIntro({ current }: { current: NonNullable<KvizRoom["current"]> 
 // vprašanji in odgovori ena za drugo; ob „Pokaži rešitev“ se kartice
 // povežejo v skupni odgovor.
 const EXAMPLE_COLORS = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#ec4899", "#3b82f6"];
+
+// 0017: vmesni slajd sredi kategorije (npr. „Dodatna splošna vprašanja“).
+function SectionSlide({ text, category }: { text: string; category: string }) {
+  const [title, ...rest] = text.split("\n");
+  const sub = rest.join(" ").trim();
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-[min(1.4vw,2.4vh)] text-center">
+      <div className="draw-pop text-[min(1.1vw,1.9vh)] font-bold uppercase tracking-[0.35em] text-cyan-300 max-lg:text-xs">
+        {category}
+      </div>
+      <h1 className="draw-land bg-gradient-to-r from-cyan-300 to-violet-400 bg-clip-text text-[min(5vw,8.5vh)] font-black leading-tight text-transparent max-lg:text-4xl">
+        {title}
+      </h1>
+      {sub && (
+        <p
+          className="draw-pop text-[min(2.2vw,3.8vh)] font-semibold text-white/80 max-lg:text-xl"
+          style={{ animationDelay: "250ms" }}
+        >
+          {sub}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function ExampleSlide({ category, example, solved }: { category: string; example: CategoryExample; solved: boolean }) {
   // Velikosti z min(vw, vh): vse skupaj se prilega višini zaslona.
