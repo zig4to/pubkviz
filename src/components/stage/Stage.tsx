@@ -659,21 +659,33 @@ function Timeline({
           const catDone = seg.start + seg.count - 1 <= doneUpTo;
           return (
             <li key={seg.start} className="flex min-w-0 basis-0 flex-col gap-1.5" style={{ flexGrow: seg.count }}>
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={(e) => {
-                  e.currentTarget.blur();
-                  if (!(room.state === "intro" && isCat)) onPick(seg.start, true);
-                }}
-                title={`Uvod kategorije ${si + 1}`}
-                className={clsx(
-                  "flex min-w-0 items-center gap-1.5 self-start truncate rounded text-left text-[clamp(0.65rem,0.8vw,0.85rem)] font-semibold uppercase tracking-wider transition-colors hover:text-white disabled:cursor-wait",
-                  isCat ? "text-cyan-300" : catDone ? "text-white/60" : "text-white/35"
-                )}
-              >
-                <span className="truncate">Kategorija {si + 1}</span>
-              </button>
+              {/* Ime kategorije se pokaže šele ob hoverju (oblaček pod oznako). */}
+              <div className="group relative min-w-0 self-start">
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    if (!(room.state === "intro" && isCat)) onPick(seg.start, true);
+                  }}
+                  aria-label={`Uvod kategorije ${si + 1}: ${seg.name}`}
+                  className={clsx(
+                    "flex min-w-0 max-w-full items-center gap-1.5 truncate rounded text-left text-[clamp(0.65rem,0.8vw,0.85rem)] font-semibold uppercase tracking-wider transition-colors hover:text-white disabled:cursor-wait",
+                    isCat ? "text-cyan-300" : catDone ? "text-white/60" : "text-white/35"
+                  )}
+                >
+                  <span className="truncate">Kategorija {si + 1}</span>
+                </button>
+                <div
+                  role="tooltip"
+                  className={clsx(
+                    "pointer-events-none absolute top-full z-50 mt-1 whitespace-nowrap rounded-md bg-gray-950/95 px-2.5 py-1 text-[clamp(0.7rem,0.9vw,0.95rem)] font-semibold text-white opacity-0 shadow-lg ring-1 ring-white/15 transition-opacity duration-150 group-hover:opacity-100",
+                    si === segments.length - 1 ? "right-0" : "left-0"
+                  )}
+                >
+                  {seg.name}
+                </div>
+              </div>
               <div
                 className={clsx(
                   "relative flex items-center justify-between rounded-full px-1 py-1 ring-1 transition-colors",
@@ -1228,6 +1240,14 @@ function ExampleSlide({ category, example, solved }: { category: string; example
         <ChoiceExample choice={example.choice} solved={solved} />
       ) : (
         <CardsExample category={category} example={example} solved={solved} />
+      )}
+      {solved && example.solvedNote && (
+        <p
+          className="draw-pop mx-auto max-w-[70vw] rounded-[min(1vw,1.7vh)] bg-cyan-400/10 px-[min(1.6vw,2.7vh)] py-[min(0.8vw,1.4vh)] text-center text-[min(1.6vw,2.8vh)] font-semibold leading-snug text-cyan-100 ring-1 ring-cyan-300/30 max-lg:max-w-full max-lg:text-base"
+          style={{ animationDelay: "700ms" }}
+        >
+          {example.solvedNote}
+        </p>
       )}
     </div>
   );

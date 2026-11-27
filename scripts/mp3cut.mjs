@@ -35,6 +35,12 @@ while (pos + 4 <= buf.length) {
   const len = Math.floor(((ver === 1 ? 144 : 72) * kbps * 1000) / sr) + pad;
   if (len < 4 || pos + len > buf.length) break;
   const dur = samples / sr;
+  // Okvir Xing/Info/VBRI (glava VBR celotne skladbe) ni zvok: izpusti ga, sicer
+  // predvajalnik izreza misli, da traja kot cela skladba.
+  if (frames === 0) {
+    const head = buf.toString("latin1", pos, pos + Math.min(len, 64));
+    if (/Xing|Info|VBRI/.test(head)) { pos += len; continue; }
+  }
   if (t >= start && t < end) { chunks.push(buf.subarray(pos, pos + len)); kept++; keptDur += dur; }
   t += dur; frames++; pos += len;
   if (t >= end) break;

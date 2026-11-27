@@ -53,6 +53,8 @@ export type CategoryExample = {
   label?: string;
   /** Poudari prvo črko odgovorov (Skrita beseda, Abecedni odgovori). */
   firstLetter?: boolean;
+  /** Opomba, ki se pokaže šele ob rešitvi primera (pod rešitvijo). */
+  solvedNote?: string;
   choice?: { q: string; options: string[]; correct: number };
 };
 
