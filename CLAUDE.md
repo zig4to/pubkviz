@@ -116,6 +116,10 @@ ponovno prebere stanje (telefon: `kviz_player_state`, oder: tabele +
   `/registracija` preusmerita prijavljene na `/admin`, vse ostalo zahteva
   prijavo. Prijava/SSO pristane na `/admin` (hub odpre koren s `#sb_at=…` →
   `SsoBridge` na `/`).
+- `/listki/[id]` (gumb „Listki“ v urejevalniku, samo lastnik): listki za
+  odgovore klasičnega kviza za tisk — A4 ležeče, dve kategoriji (A5) na list,
+  samo prostor za odgovore (krogci A–D pri `choice`, podvrstice pri `parts`),
+  `components/print/AnswerSheets.tsx`. Izven `(app)`, da ni zgornje vrstice.
 - Telefon: `components/play/PlayClient.tsx` (prek `PlayLoader`, `ssr:false`).
 - Oder: `components/stage/Stage.tsx` (prek `StageLoader`, `ssr:false`).
 - Admin: `components/admin/AdminHome.tsx`, `components/editor/QuizEditor.tsx`

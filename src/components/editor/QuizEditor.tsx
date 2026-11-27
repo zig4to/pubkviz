@@ -16,6 +16,7 @@ import {
   IconNotebook,
   IconPencil,
   IconPlus,
+  IconPrinter,
   IconTrash,
   IconX,
 } from "@/components/ui/icons";
@@ -208,6 +209,17 @@ export default function QuizEditor({
           aria-label="Ime kviza"
           className="flex-1 border-transparent bg-transparent text-lg font-semibold shadow-none hover:border-gray-300 dark:border-transparent dark:bg-transparent dark:hover:border-gray-700"
         />
+        {cats.length > 0 && (
+          <Link
+            href={`/listki/${quiz.id}`}
+            target="_blank"
+            title="Listki za odgovore po kategorijah (za tisk)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
+          >
+            <IconPrinter className="h-4 w-4" />
+            Listki
+          </Link>
+        )}
         <Button onClick={start} disabled={busy || total === 0}>
           Začni igro
         </Button>
